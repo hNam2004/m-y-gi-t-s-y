@@ -24,6 +24,7 @@ const char *FIRMWARE_VERSION = "1.0.0";
 #define RST_PIN 23
 #define LED_PIN 21
 #define COIN_PIN 12
+#define IN_SIG2 18
 // --- Khai báo biến toàn cục ---
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -33,6 +34,205 @@ TaskHandle_t task2_handle = NULL;
 volatile uint8_t Interupt_Flag = 0;
 volatile bool coinPulseLoopActive = false; // Cờ để bật/tắt vòng lặp
 volatile bool connectWifiPing = false;
+ 
+// Khai bao byte modbus
+byte requestFrame01[] = {0x01, 0x10, 0x01, 0x2E, 0x00, 0x01, 0x02, 0x00, 0x01, 0x71, 0x1E};    
+byte requestFrame02[] = {0x01, 0x10, 0x01, 0x2F, 0x00, 0x01, 0x02, 0x00, 0x01, 0x70, 0xCF};
+byte requestFrame03[] = {0x01, 0x10, 0x01, 0x2C, 0x00, 0x01, 0x02, 0x00, 0x01, 0x70, 0xFC};
+
+// Nhóm lệnh "Giả lập coin"
+byte requestFrame04[] = {0x01, 0x10, 0x01, 0x31, 0x00, 0x01, 0x02, 0x00, 0x01, 0x73, 0x71};
+byte requestFrame05[] = {0x01, 0x10, 0x01, 0x31, 0x00, 0x01, 0x02, 0x00, 0x02, 0x33, 0x70};
+byte requestFrame06[] = {0x01, 0x10, 0x01, 0x31, 0x00, 0x01, 0x02, 0x00, 0x03, 0xF2, 0xB0};
+
+// Nhóm lệnh "Chọn chương trình"
+byte requestFrame07[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x01, 0xB3, 0x82}; 
+byte requestFrame08[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x02, 0x33, 0x43};
+byte requestFrame09[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x03, 0xF2, 0x83};
+byte requestFrame10[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x04, 0xB3, 0x41};
+byte requestFrame11[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x05, 0x72, 0x81};
+byte requestFrame12[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x06, 0x40, 0x83};
+byte requestFrame13[] = {0x01, 0x03, 0x03, 0x20, 0x00, 0x46, 0xC5, 0xB6};
+byte machineStatusCommand[] = {0x01, 0x01, 0x00, 0x00, 0x00, 0xA0, 0x3C, 0x72};
+
+const int RESPONSE_BUFFER_SIZE = 145;
+byte responseBuffer[RESPONSE_BUFFER_SIZE];
+
+struct MachineData {
+  int temperature;
+  int warningCount;
+  long totalCoins;
+  long coinsInBox;
+  int runCount;
+  char modelName[20];
+  bool isValid;
+};
+MachineData machineInfo;
+
+uint16_t calculateCRC(const byte* data, int len) {
+  uint16_t crc = 0xFFFF;
+  for (int pos = 0; pos < len; pos++) {
+    crc ^= (uint16_t)data[pos];
+    for (int i = 8; i != 0; i--) {
+      if ((crc & 0x0001) != 0) {
+        crc >>= 1;
+        crc ^= 0xA001;
+      } else {
+        crc >>= 1;
+      }
+    }
+  }
+  return (crc << 8) | (crc >> 8);
+}
+
+bool parseResponse(const byte* buffer, int len) {
+  if (len < 5) return false;
+  if (buffer[0] != requestFrame13[0] || buffer[1] != requestFrame13[1]) return false;
+  int dataByteCount = buffer[2];
+  if (len != 3 + dataByteCount + 2) return false;
+  uint16_t receivedCRC = (buffer[len - 2] << 8) | buffer[len - 1];
+  uint16_t calculatedCRC = calculateCRC(buffer, len - 2);
+  if (receivedCRC != calculatedCRC) return false;
+  
+  machineInfo.temperature = (buffer[3+2] << 8) | buffer[3+3];
+  machineInfo.warningCount = (buffer[3+8] << 8) | buffer[3+9];
+  machineInfo.totalCoins = (long)(buffer[3+22] << 24) | (long)(buffer[3+23] << 16) | (buffer[3+24] << 8) | buffer[3+25];
+  machineInfo.coinsInBox = (long)(buffer[3+58] << 24) | (long)(buffer[3+59] << 16) | (buffer[3+60] << 8) | buffer[3+61];
+  machineInfo.runCount = (buffer[3+64] << 8) | buffer[3+65];
+  int modelStartIndex = 3 + 70;
+  int modelLen = 0;
+  while(modelLen < 19 && (modelStartIndex + modelLen) < (len - 2) && buffer[modelStartIndex + modelLen] != 0) {
+    machineInfo.modelName[modelLen] = (char)buffer[modelStartIndex + modelLen];
+    modelLen++;
+  }
+  machineInfo.modelName[modelLen] = '\0';
+  machineInfo.isValid = true;
+  return true;
+}
+int getMachineStatus() {
+    while(Serial.available()) Serial.read();
+    Serial.write(machineStatusCommand, sizeof(machineStatusCommand));
+    
+    unsigned long startTime = millis();
+    int bytesRead = 0;
+    byte statusBuffer[30];
+    while (millis() - startTime < 1000 && bytesRead < 30) {
+        if (Serial.available()) {
+            statusBuffer[bytesRead++] = Serial.read();
+        }
+    }
+
+    if (bytesRead >= 6) {
+        uint16_t receivedCRC = (statusBuffer[bytesRead - 2] << 8) | statusBuffer[bytesRead - 1];
+        if (calculateCRC(statusBuffer, bytesRead - 2) == receivedCRC) {
+            if (statusBuffer[5] == 0x01) return 1;
+            else return 0;
+        }
+    }
+    return -1;
+}
+// (ADDED) Hàm đóng gói việc gửi lệnh và nhận phản hồi
+bool readAndParseMachineData() {
+    // Xóa bộ đệm cũ trước khi đọc
+    while(Serial.available()) Serial.read();
+
+    Serial.write(requestFrame13, sizeof(requestFrame13));
+
+    unsigned long startTime = millis();
+    int bytesRead = 0;
+    while (millis() - startTime < 1500 && bytesRead < RESPONSE_BUFFER_SIZE) { // Tăng timeout lên 1.5s cho chắc chắn
+        if (Serial.available()) {
+            responseBuffer[bytesRead] = Serial.read();
+            bytesRead++;
+        }
+    }
+
+    if (bytesRead > 0) {
+        return parseResponse(responseBuffer, bytesRead);
+    }
+    
+    // Không nhận được phản hồi
+    machineInfo.isValid = false;
+    return false;
+}
+void Runmachine(void)
+{
+   Serial.write(requestFrame01, sizeof(requestFrame01));
+   client.publish(mqtt_topic_cmd,"{\"t\":\"c\", \"v\":\"1\"}");
+}
+
+void Nextstep(void)
+{
+   Serial.write(requestFrame02, sizeof(requestFrame02));
+}
+void info(void){
+    Serial.write(requestFrame13, sizeof(requestFrame13));
+}
+void Mute(void )
+{
+   Serial.write(requestFrame03, sizeof(requestFrame03));
+} 
+void Takecoin1(void)
+{
+   Serial.write(requestFrame04, sizeof(requestFrame04));
+   client.publish(mqtt_topic_cmd,"{\"t\":\"m\", \"v\":\"1\"}");
+} 
+
+void Takecoin2(void)
+{
+   Serial.write(requestFrame05, sizeof(requestFrame05));
+   client.publish(mqtt_topic_cmd,"{\"t\":\"m\", \"v\":\"2\"}");
+
+} 
+
+void Takecoin3(void)
+{
+   Serial.write(requestFrame06, sizeof(requestFrame06));
+   client.publish(mqtt_topic_cmd,"{\"t\":\"m\", \"v\":\"3\"}");
+
+} 
+
+void Program1(void)
+{
+   Serial.write(requestFrame07, sizeof(requestFrame07));
+   client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"1\"}");
+
+} 
+
+void Program2(void )
+{
+   Serial.write(requestFrame08, sizeof(requestFrame08));
+      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"2\"}");
+
+} 
+
+void Program3(void)
+{
+   Serial.write(requestFrame09, sizeof(requestFrame09));
+      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"3\"}");
+
+} 
+
+void Program4(void )
+{
+   Serial.write(requestFrame10, sizeof(requestFrame10));
+      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"4\"}");
+
+} 
+
+void Program5(void)
+{
+   Serial.write(requestFrame11, sizeof(requestFrame11));
+      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"5\"}");
+
+} 
+
+void Program6(void)
+{
+   Serial.write(requestFrame12, sizeof(requestFrame12));
+      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"6\"}");
+
+} 
 // --- Khai báo các hàm ---
 void mqttCallback(char *topic, byte *payload, unsigned int length);
 void reconnect();
@@ -49,21 +249,6 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     Serial.print("Message: ");
     Serial.println(message);
 
-    // if (strcmp(topic, mqtt_topic_cmd) == 0)                   ///Đoạn lệnh điều khiển khi nào Hiến xong thì copy vào
-    // {
-    //     if (strcmp(message, "1") == 0)
-    //     {
-    //         client.publish(mqtt_topic_cmd, "{\"t\":\"c\",\"v\":\"value\"}");
-    //     }
-    //     if (strcmp(message, "2") == 0)
-    //     {
-    //         client.publish(mqtt_topic_cmd, "{\"t\":\"p\",\"v\":\"value\"}");
-    //     }
-    //     if (strcmp(message, "3") == 0)
-    //     {
-    //         client.publish(mqtt_topic_cmd, "{\"t\":\"m\",\"v\":\"value\"}");
-    //     }
-    // }
     if (strcmp(topic, mqtt_topic_control) == 0)
     {
         Serial.print("Control command: ");
@@ -74,18 +259,54 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         const char *v_value = control["v"];
         if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "1") == 0)
         {
+            
             coinPulseLoopActive = false;
             digitalWrite(COIN_PIN, HIGH);
+            Takecoin1();
         }
         else if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "2") == 0)
         {
             coinPulseLoopActive = true;
+            Takecoin2();
         }
         else if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "3") == 0)
         {
             coinPulseLoopActive = false;
             digitalWrite(COIN_PIN, LOW);
+            Takecoin3();
         }
+        else if (t_value && v_value && strcmp(t_value, "c") == 0 && strcmp(v_value, "1") == 0)
+        {
+            Runmachine();
+        }
+        else if (t_value && v_value && strcmp(t_value, "c") == 0 && strcmp(v_value, "0") == 0)
+        {
+
+        }
+        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "1") == 0)
+        {
+            Program1();
+        }
+        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "2") == 0)
+        {
+            Program2();
+        }
+        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "3") == 0)
+        {
+            Program3();
+        }   
+        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "4") == 0)
+        {   
+            Program4();
+        }    
+        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "5") == 0)
+        {   
+            Program5();
+        } 
+        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "6") == 0)
+        {
+            Program6();
+        }                                                     
     }
     else if (strcmp(topic, mqtt_topic_status) == 0)
     {
@@ -315,7 +536,6 @@ void task5Function(void *parameter)
                         client.subscribe(mqtt_topic_control);
                         client.subscribe(mqtt_topic_info);
                         client.subscribe(mqtt_topic_status);
-                        client.publish(mqtt_topic_status, FIRMWARE_VERSION, true);
                     }
                     else
                     {
@@ -332,28 +552,38 @@ void task5Function(void *parameter)
                 long now = millis();
                 if (now - lastMsgTime > publishInterval)
                 {
-                    float temp_value = 0;
-                    int coin_value = 0;
-                    int cycles_value = 0;
                     lastMsgTime = now;
+                    int currentStatus = -1;
+                    Serial.println("[Task 5] Reading machine data...");
+                    // Gọi hàm đọc và phân tích dữ liệu từ máy
+                    bool infoReadSuccess = false;
+                    currentStatus = getMachineStatus();
+                    infoReadSuccess = readAndParseMachineData();
+                    StaticJsonDocument<200> doc;    
+                    JsonObject obj = doc.to<JsonObject>();
+                    if (currentStatus){
+                        obj["s"] = 1; 
+                    }
+                    else obj["s"] = 0;
+                    if (infoReadSuccess) {
+                        
+                        String v_value = String(machineInfo.temperature) + "," + String(machineInfo.totalCoins) + "," + String(machineInfo.runCount);
+                        obj["v"] = v_value;
+                        obj["st"] = 0;
+                    } else {
+                        obj["v"] = "0,0,0";
+                        obj["st"] = "02";
+                    }
+                     char jsonBuffer[512];
+                     serializeJson(doc, jsonBuffer);
+                     client.publish(mqtt_topic_info, jsonBuffer);
 
-                    // Gửi thông tin thiết bị (dưới dạng JSON)
-                    StaticJsonDocument<200> doc;
-                    doc["s"] = 0;
-                    String v_value = String(temp_value) + "," + String(coin_value) + "," + String(cycles_value);
-                    doc["v"] = v_value;
-                    doc["st"] = 0;
-                    char jsonBuffer[512];
-                    serializeJson(doc, jsonBuffer);
-                    client.publish(mqtt_topic_info, jsonBuffer);
+                     Serial.print("Published info: ");
+                      Serial.println(jsonBuffer);
 
-                    Serial.print("Published info: ");
-                    Serial.println(jsonBuffer);
-
-                    // Nháy đèn báo hiệu đã gửi tin
-                    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-                    vTaskDelay(pdMS_TO_TICKS(100)); // Nháy nhanh
-                    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+                      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+                      vTaskDelay(pdMS_TO_TICKS(100));
+                      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
                 }
             }
         }
@@ -408,13 +638,14 @@ void task6Function(void *parameter)
 
 void setup()
 {
-    Serial.begin(115200);
+    Serial.begin(9600,SERIAL_8N1);
     delay(1000);
     sys_wifi_init();
     sys_capserver_init();
     pinMode(BOOT_PIN, INPUT_PULLUP);
     pinMode(RST_PIN, INPUT_PULLUP);
-    pinMode(LED_PIN, OUTPUT);                                                       // Configure BOOT pin as input with internal pull-up resistor
+    pinMode(LED_PIN, OUTPUT);
+    pinMode(COIN_PIN,OUTPUT);                                                       // Configure BOOT pin as input with internal pull-up resistor
     attachInterrupt(digitalPinToInterrupt(BOOT_PIN), bootInterruptHandler, RISING); // Attach interrupt handler to rising edge of BOOT pin
     Serial.println("All Done!");
     client.setServer(mqtt_server, mqtt_port);
