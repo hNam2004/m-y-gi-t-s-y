@@ -278,48 +278,39 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         const char *v_value = doc["v"];
 
         if (t_value && v_value) {
-            // Xử lý các hành động phụ đặc biệt cho lệnh 'm'
-            // if (strcmp(t_value, "m") == 0) {
-            //     if (strcmp(v_value, "1") == 0) {
-            //         digitalWrite(COIN_PIN, HIGH);
-            //     } else if (strcmp(v_value, "2") == 0) {
-            //         coinPulseLoopActive = true;
-            //     } else if (strcmp(v_value, "3") == 0) {
-            //         coinPulseLoopActive = false;
-            //         digitalWrite(COIN_PIN, LOW);
-            //     }
-            // }
-
-            // Gửi lệnh Modbus cho bất kỳ loại lệnh hợp lệ nào ('c', 'm', 'p')
             if (strcmp(t_value, "c") == 0 || strcmp(t_value, "m") == 0 || strcmp(t_value, "p") == 0) {
                 sendMobus(t_value, v_value);
             } 
-            else if (strcmp(t_value, "s")==0 && strcmp (v_value, "1")){
+            else if (strcmp(t_value, "s") == 0 && strcmp(v_value, "1") == 0) {
+                char jsonMsg[50];
+                sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
+                client.publish(mqtt_topic_cmd, jsonMsg);
                 int currentStatus = getMachineStatus();
-                    vTaskDelay(pdMS_TO_TICKS(200)); // Đợi một chút
-                    
-                    // Xóa buffer một lần nữa để chắc chắn
-                    while(Serial.available()) Serial.read();
-
-                    bool infoReadSuccess = readAndParseMachineData();
-
-                    StaticJsonDocument<256> docs;
-                    docs["s"] = (currentStatus == 1) ? 1 : 0;
-                    if (infoReadSuccess) {
-                        char v_buffer[100];
-                        sprintf(v_buffer, "%d,%d,%ld,%d", machineInfo.temperature, machineInfo.warningCount, machineInfo.totalCoins, machineInfo.runCount);
-                        docs["v"] = v_buffer;
-                        docs["st"] = 0;
-                    } else {
-                        docs["v"] = "0,0,0,0";
-                        docs["st"] = "02";
-                    }
-                    char jsonBuffer[256];
-                    serializeJson(docs, jsonBuffer);
-                    client.publish(mqtt_topic_info, jsonBuffer);
+                vTaskDelay(pdMS_TO_TICKS(200));
+                while(Serial.available()) Serial.read();
+                bool infoReadSuccess = readAndParseMachineData();
+                StaticJsonDocument<256> docs;
+                docs["s"] = (currentStatus == 1) ? 1 : 0;
+                if (infoReadSuccess) {
+                    char v_buffer[100];
+                    sprintf(v_buffer, "%d,%d,%ld,%d", machineInfo.temperature, machineInfo.warningCount, machineInfo.totalCoins, machineInfo.runCount);
+                    docs["v"] = v_buffer;
+                    docs["st"] = 0;
+                } else {
+                    docs["v"] = "0,0,0,0";
+                    docs["st"] = "02";
+                }
+                char jsonBuffer[256];
+                serializeJson(docs, jsonBuffer);
+                client.publish(mqtt_topic_info, jsonBuffer);
             }
-            else if (strcmp(t_value, "i")&& strcmp(v_value, "1")){
-                client.publish(mqtt_topic_status, FIRMWARE_VERSION);
+            else if (strcmp(t_value, "i") == 0 && strcmp(v_value, "1") == 0) { 
+                char jsonMsg[50];
+                sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
+                client.publish(mqtt_topic_cmd, jsonMsg);
+
+                // 2. Gửi phiên bản firmware lên INFO
+                client.publish(mqtt_topic_info, FIRMWARE_VERSION);
             }
             else {
                 Serial.printf("Invalid command type 't': %s\n", t_value);
@@ -329,7 +320,6 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
             Serial.println("Invalid JSON format in control topic");
         }
     }
-    
 }
 
 
@@ -438,7 +428,7 @@ void task5Function(void *parameter)
                     if (client.connect("TEWD43424O2X")) {
                         Serial.println("MQTT connected");
                         client.subscribe(mqtt_topic_control);
-                        client.subscribe(mqtt_topic_status);
+                        client.subscribe(mqtt_topic_info);
                     } else {
                         Serial.printf("failed, rc=%d\n", client.state());
                     }
@@ -512,5 +502,5 @@ void setup()
 
 void loop()
 {
-    // Để trống vì đã sử dụng FreeRTOS
+    
 }
