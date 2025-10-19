@@ -293,31 +293,9 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
             // Gửi lệnh Modbus cho bất kỳ loại lệnh hợp lệ nào ('c', 'm', 'p')
             if (strcmp(t_value, "c") == 0 || strcmp(t_value, "m") == 0 || strcmp(t_value, "p") == 0) {
                 sendMobus(t_value, v_value);
-            } else {
-                Serial.printf("Invalid command type 't': %s\n", t_value);
-            }
-
-        } else {
-            Serial.println("Invalid JSON format in control topic");
-        }
-    }
-    else if (strcmp(topic, mqtt_topic_status) == 0)
-    {
-        StaticJsonDocument<128> doc;
-        DeserializationError error = deserializeJson(doc, payload, length);
-        if (error) {
-            Serial.printf("deserializeJson() failed: %s\n", error.c_str());
-            return;
-        }
-
-        const char *t_value = doc["t"];
-        const char *v_value = doc["v"];
-        
-        if (t_value && v_value && strcmp(t_value, "i") == 0 && strcmp(v_value, "1") == 0) {
-            client.publish(mqtt_topic_status, FIRMWARE_VERSION);
-        }
-        if (t_value && v_value && strcmp(t_value, "s") == 0 && strcmp(v_value, "1") == 0) {
-                    int currentStatus = getMachineStatus();
+            } 
+            else if (strcmp(t_value, "s")==0 && strcmp (v_value, "1")){
+                int currentStatus = getMachineStatus();
                     vTaskDelay(pdMS_TO_TICKS(200)); // Đợi một chút
                     
                     // Xóa buffer một lần nữa để chắc chắn
@@ -339,8 +317,19 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                     char jsonBuffer[256];
                     serializeJson(docs, jsonBuffer);
                     client.publish(mqtt_topic_info, jsonBuffer);
+            }
+            else if (strcmp(t_value, "i")&& strcmp(v_value, "1")){
+                client.publish(mqtt_topic_status, FIRMWARE_VERSION);
+            }
+            else {
+                Serial.printf("Invalid command type 't': %s\n", t_value);
+            }
+
+        } else {
+            Serial.println("Invalid JSON format in control topic");
         }
     }
+    
 }
 
 
