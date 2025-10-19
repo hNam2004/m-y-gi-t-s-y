@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HardwareSerial.h>
@@ -12,19 +11,21 @@
 #include <ArduinoJson.h>
 
 // --- Cấu hình MQTT ---
-const char *mqtt_server = "109.237.65.252";
+const char *mqtt_server = "devices.koisolutions.vn";
 const int mqtt_port = 7183;
-const char *mqtt_topic_info = "Kdev/1234/info";
-const char *mqtt_topic_cmd = "Kdev/1234/cmd";
-const char *mqtt_topic_status = "Kdev/1234/status";
-const char *mqtt_topic_control = "Kdev/1234/control";
+const char *mqtt_topic_info = "Kdev/TEWD43424O2X/info";
+const char *mqtt_topic_cmd = "Kdev/TEWD43424O2X/cmd";
+const char *mqtt_topic_status = "Kdev/TEWD43424O2X/status";
+const char *mqtt_topic_control = "Kdev/TEWD43424O2X/control";
 const char *FIRMWARE_VERSION = "1.0.0";
+
 // --- Cấu hình chân GPIO ---
 #define BOOT_PIN 99
 #define RST_PIN 23
 #define LED_PIN 21
 #define COIN_PIN 12
 #define IN_SIG2 18
+
 // --- Khai báo biến toàn cục ---
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -32,87 +33,189 @@ unsigned int pressTime = 0;
 bool press = false;
 TaskHandle_t task2_handle = NULL;
 volatile uint8_t Interupt_Flag = 0;
-volatile bool coinPulseLoopActive = false; // Cờ để bật/tắt vòng lặp
 volatile bool connectWifiPing = false;
- 
-// Khai bao byte modbus
-byte requestFrame01[] = {0x01, 0x10, 0x01, 0x2E, 0x00, 0x01, 0x02, 0x00, 0x01, 0x71, 0x1E};    
-byte requestFrame02[] = {0x01, 0x10, 0x01, 0x2F, 0x00, 0x01, 0x02, 0x00, 0x01, 0x70, 0xCF};
-byte requestFrame03[] = {0x01, 0x10, 0x01, 0x2C, 0x00, 0x01, 0x02, 0x00, 0x01, 0x70, 0xFC};
 
-// Nhóm lệnh "Giả lập coin"
-byte requestFrame04[] = {0x01, 0x10, 0x01, 0x31, 0x00, 0x01, 0x02, 0x00, 0x01, 0x73, 0x71};
-byte requestFrame05[] = {0x01, 0x10, 0x01, 0x31, 0x00, 0x01, 0x02, 0x00, 0x02, 0x33, 0x70};
-byte requestFrame06[] = {0x01, 0x10, 0x01, 0x31, 0x00, 0x01, 0x02, 0x00, 0x03, 0xF2, 0xB0};
+// --- Khai báo các lệnh Modbus cố định ---
+// Lệnh đọc thông tin máy (đọc nhiều thanh ghi)
+byte requestReadInfo[] = {0x01, 0x03, 0x03, 0x20, 0x00, 0x46, 0xC5, 0xB6};
+// Lệnh đọc trạng thái máy (đọc coil)
+byte requestReadStatus[] = {0x01, 0x01, 0x00, 0x00, 0x00, 0xA0, 0x3C, 0x72};
 
-// Nhóm lệnh "Chọn chương trình"
-byte requestFrame07[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x01, 0xB3, 0x82}; 
-byte requestFrame08[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x02, 0x33, 0x43};
-byte requestFrame09[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x03, 0xF2, 0x83};
-byte requestFrame10[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x04, 0xB3, 0x41};
-byte requestFrame11[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x05, 0x72, 0x81};
-byte requestFrame12[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02, 0x00, 0x06, 0x40, 0x83};
-byte requestFrame13[] = {0x01, 0x03, 0x03, 0x20, 0x00, 0x46, 0xC5, 0xB6};
-byte machineStatusCommand[] = {0x01, 0x01, 0x00, 0x00, 0x00, 0xA0, 0x3C, 0x72};
-
+// --- Buffer và Struct cho dữ liệu máy ---
 const int RESPONSE_BUFFER_SIZE = 145;
 byte responseBuffer[RESPONSE_BUFFER_SIZE];
 
 struct MachineData {
-  int temperature;
-  int warningCount;
-  long totalCoins;
-  long coinsInBox;
-  int runCount;
-  char modelName[20];
-  bool isValid;
+    int temperature;
+    int warningCount;
+    long totalCoins;
+    long coinsInBox;
+    int runCount;
+    char modelName[20];
+    bool isValid;
 };
 MachineData machineInfo;
 
-uint16_t calculateCRC(const byte* data, int len) {
-  uint16_t crc = 0xFFFF;
-  for (int pos = 0; pos < len; pos++) {
-    crc ^= (uint16_t)data[pos];
-    for (int i = 8; i != 0; i--) {
-      if ((crc & 0x0001) != 0) {
-        crc >>= 1;
-        crc ^= 0xA001;
-      } else {
-        crc >>= 1;
-      }
+
+// =================================================================
+// ==== BỘ CÔNG CỤ TẠO VÀ GỬI LỆNH MODBUS (ĐÃ TÍCH HỢP) ====
+// =================================================================
+
+// --- HÀM TÍNH TOÁN MODBUS CRC-16 ---
+unsigned int ModRTU_CRC(byte buf[], int len) {
+    unsigned int crc = 0xFFFF;
+    for (int pos = 0; pos < len; pos++) {
+        crc ^= (unsigned int)buf[pos];
+        for (int i = 8; i != 0; i--) {
+            if ((crc & 0x0001) != 0) {
+                crc >>= 1;
+                crc ^= 0xA001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    return crc;
+}
+
+void printByteAsBinary(byte data) {
+  // Lặp từ bit 7 (MSB) về bit 0 (LSB)
+  for (int i = 7; i >= 0; i--) {
+    Serial.print(bitRead(data, i));
+    if (i == 4) {
+      Serial.print(" ");
     }
   }
-  return (crc << 8) | (crc >> 8);
+}
+// --- KHUNG TRUYỀN MẪU CHO CÁC LỆNH MODBUS GHI DỮ LIỆU (Write Register) ---
+// Định dạng: [SlaveID, FuncCode, StartAddr_Hi, StartAddr_Lo, NumReg_Hi, NumReg_Lo, ByteCount]
+const byte frameTemplate_C[] = {0x01, 0x10, 0x01, 0x2E, 0x00, 0x01, 0x02}; // Start/Stop/Next...
+const byte frameTemplate_M[] = {0x01, 0x10, 0x01, 0x31, 0x00, 0x01, 0x02}; // Giả lập coin
+const byte frameTemplate_P[] = {0x01, 0x10, 0x01, 0x32, 0x00, 0x01, 0x02}; // Chọn chương trình
+// HÀM GỬI DỮ LIỆU QUA CỔNG SERIAL
+void send_to_serial(byte _msg[], int _len) {
+    while(Serial.available()) Serial.read(); // Xóa bộ đệm nhận trước khi gửi
+    Serial.write(_msg, _len);
+    Serial.flush(); // Đợi cho đến khi tất cả dữ liệu được gửi đi
+}
+
+/**
+ * @brief Xây dựng và gửi một khung truyền Modbus RTU để ghi 1 thanh ghi (Function Code 16)
+ * @param commandType Loại lệnh ("c", "m", hoặc "p") để chọn thanh ghi đích.
+ * @param commandValue Giá trị (dưới dạng chuỗi) để ghi vào thanh ghi.
+ */
+void sendMobus(const char* commandType, const char* commandValue) {
+    const byte* templateFrame = NULL;
+    size_t templateSize = 0;
+    uint16_t dataValue = 0; // Giá trị sẽ được ghi vào thanh ghi
+
+    // Chuyển đổi giá trị từ chuỗi sang số (sẽ dùng cho trường hợp chung)
+    uint16_t valueFromStr = atoi(commandValue);
+
+    // --- LOGIC CHỌN TEMPLATE ĐÃ SỬA ĐỔI ---
+    if (strcmp(commandType, "c") == 0) {
+        templateFrame = frameTemplate_C;
+        templateSize = sizeof(frameTemplate_C);
+        dataValue = valueFromStr; // Dùng giá trị từ input
+
+    } else if (strcmp(commandType, "m") == 0) {
+        templateFrame = frameTemplate_M;
+        templateSize = sizeof(frameTemplate_M);
+        dataValue = valueFromStr; // Dùng giá trị từ input
+
+    } else if (strcmp(commandType, "p") == 0) {
+        templateFrame = frameTemplate_P;
+        templateSize = sizeof(frameTemplate_P);
+        dataValue = valueFromStr; // Dùng giá trị từ input
+    } else {
+        Serial.printf("Loi: Loai lenh khong xac dinh '%s'\n", commandType);
+        return;
+    }
+    // --- HẾT LOGIC SỬA ĐỔI ---
+
+    // Kích thước cuối cùng = template (7) + 2 byte dữ liệu + 2 byte CRC = 11 bytes
+    const size_t finalFrameSize = templateSize + 4;
+    byte finalFrame[finalFrameSize];
+    
+    // 1. Sao chép khung mẫu vào
+    memcpy(finalFrame, templateFrame, templateSize);
+
+    // 2. Gắn 2 byte dữ liệu vào (high byte first)
+    //    (dataValue bây giờ đã được gán đúng ở logic bên trên)
+    finalFrame[templateSize]     = dataValue >> 8;
+    finalFrame[templateSize + 1] = dataValue & 0xFF;
+
+    // 3. Tính CRC cho phần dữ liệu đã có (template + 2 byte data)
+    //    (Giả sử hàm ModRTU_CRC() tồn tại)
+    unsigned int crc = ModRTU_CRC(finalFrame, templateSize + 2);
+
+    // 4. Gắn 2 byte CRC vào cuối (low byte first)
+    finalFrame[templateSize + 2] = crc & 0xFF;
+    finalFrame[templateSize + 3] = crc >> 8;
+
+    Serial.print("[MODBUS TX]: ");
+    for(size_t i = 0; i < finalFrameSize; i++) {
+        Serial.printf("%02X ", finalFrame[i]);
+    }
+    Serial.println();
+    
+    // (Giả sử hàm send_to_serial() tồn tại)
+    send_to_serial(finalFrame, finalFrameSize);
+    
+    // Sau khi gửi lệnh, publish lại trạng thái lệnh lên MQTT
+    // (Giả sử 'client' và 'mqtt_topic_cmd' tồn tại)
+    char jsonMsg[50];
+    sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", commandType, commandValue);
+    client.publish(mqtt_topic_cmd, jsonMsg);
+}
+
+// =================================================================
+// ==== CÁC HÀM XỬ LÝ PHẢN HỒI MODBUS (CỦA BẠN) ====
+// =================================================================
+
+uint16_t calculateCRC_Response(const byte* data, int len) {
+    uint16_t crc = 0xFFFF;
+    for (int pos = 0; pos < len; pos++) {
+        crc ^= (uint16_t)data[pos];
+        for (int i = 8; i != 0; i--) {
+            if ((crc & 0x0001) != 0) {
+                crc >>= 1;
+                crc ^= 0xA001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    return (crc << 8) | (crc >> 8); // CRC cho phản hồi có thể bị đảo byte
 }
 
 bool parseResponse(const byte* buffer, int len) {
-  if (len < 5) return false;
-  if (buffer[0] != requestFrame13[0] || buffer[1] != requestFrame13[1]) return false;
-  int dataByteCount = buffer[2];
-  if (len != 3 + dataByteCount + 2) return false;
-  uint16_t receivedCRC = (buffer[len - 2] << 8) | buffer[len - 1];
-  uint16_t calculatedCRC = calculateCRC(buffer, len - 2);
-  if (receivedCRC != calculatedCRC) return false;
-  
-  machineInfo.temperature = (buffer[3+2] << 8) | buffer[3+3];
-  machineInfo.warningCount = (buffer[3+8] << 8) | buffer[3+9];
-  machineInfo.totalCoins = (long)(buffer[3+22] << 24) | (long)(buffer[3+23] << 16) | (buffer[3+24] << 8) | buffer[3+25];
-  machineInfo.coinsInBox = (long)(buffer[3+58] << 24) | (long)(buffer[3+59] << 16) | (buffer[3+60] << 8) | buffer[3+61];
-  machineInfo.runCount = (buffer[3+64] << 8) | buffer[3+65];
-  int modelStartIndex = 3 + 70;
-  int modelLen = 0;
-  while(modelLen < 19 && (modelStartIndex + modelLen) < (len - 2) && buffer[modelStartIndex + modelLen] != 0) {
-    machineInfo.modelName[modelLen] = (char)buffer[modelStartIndex + modelLen];
-    modelLen++;
-  }
-  machineInfo.modelName[modelLen] = '\0';
-  machineInfo.isValid = true;
-  return true;
-}
-int getMachineStatus() {
-    while(Serial.available()) Serial.read();
-    Serial.write(machineStatusCommand, sizeof(machineStatusCommand));
+    if (len < 5) return false;
+    if (buffer[0] != requestReadInfo[0] || buffer[1] != requestReadInfo[1]) return false;
+    int dataByteCount = buffer[2];
+    if (len != 3 + dataByteCount + 2) return false;
+    uint16_t receivedCRC = (buffer[len - 2] << 8) | buffer[len - 1];
+    uint16_t calculatedCRC = calculateCRC_Response(buffer, len - 2);
+    if (receivedCRC != calculatedCRC) return false;
     
+    machineInfo.temperature = (buffer[3+2] << 8) | buffer[3+3];
+    machineInfo.warningCount = (buffer[3+8] << 8) | buffer[3+9];
+    machineInfo.totalCoins = (long)(buffer[3+22] << 24) | (long)(buffer[3+23] << 16) | (buffer[3+24] << 8) | buffer[3+25];
+    machineInfo.coinsInBox = (long)(buffer[3+58] << 24) | (long)(buffer[3+59] << 16) | (buffer[3+60] << 8) | buffer[3+61];
+    machineInfo.runCount = (buffer[3+64] << 8) | buffer[3+65];
+    int modelStartIndex = 3 + 70;
+    int modelLen = 0;
+    while(modelLen < 19 && (modelStartIndex + modelLen) < (len - 2) && buffer[modelStartIndex + modelLen] != 0) {
+        machineInfo.modelName[modelLen] = (char)buffer[modelStartIndex + modelLen];
+        modelLen++;
+    }
+    machineInfo.modelName[modelLen] = '\0';
+    machineInfo.isValid = true;
+    return true;
+}
+
+int getMachineStatus() {
+    Serial.write(requestReadStatus, sizeof(requestReadStatus));
     unsigned long startTime = millis();
     int bytesRead = 0;
     byte statusBuffer[30];
@@ -123,266 +226,124 @@ int getMachineStatus() {
     }
 
     if (bytesRead >= 6) {
+        byte statusByte = statusBuffer[5];
         uint16_t receivedCRC = (statusBuffer[bytesRead - 2] << 8) | statusBuffer[bytesRead - 1];
-        if (calculateCRC(statusBuffer, bytesRead - 2) == receivedCRC) {
-            if (statusBuffer[5] == 0x01) return 1;
-            else return 0;
+        if (calculateCRC_Response(statusBuffer, bytesRead - 2) == receivedCRC) {
+            if ((statusByte & 0x01) == 1) return 1; // Máy đang chạy
+            else return 0; // Máy đang dừng
         }
     }
-    return -1;
+    return -1; // Lỗi hoặc timeout
 }
-// (ADDED) Hàm đóng gói việc gửi lệnh và nhận phản hồi
+
 bool readAndParseMachineData() {
-    // Xóa bộ đệm cũ trước khi đọc
-    while(Serial.available()) Serial.read();
-
-    Serial.write(requestFrame13, sizeof(requestFrame13));
-
+    Serial.write(requestReadInfo, sizeof(requestReadInfo));
     unsigned long startTime = millis();
     int bytesRead = 0;
-    while (millis() - startTime < 1500 && bytesRead < RESPONSE_BUFFER_SIZE) { // Tăng timeout lên 1.5s cho chắc chắn
+    while (millis() - startTime < 500 && bytesRead < RESPONSE_BUFFER_SIZE) {
         if (Serial.available()) {
-            responseBuffer[bytesRead] = Serial.read();
-            bytesRead++;
+            responseBuffer[bytesRead++] = Serial.read();
         }
     }
 
     if (bytesRead > 0) {
         return parseResponse(responseBuffer, bytesRead);
     }
-    
-    // Không nhận được phản hồi
     machineInfo.isValid = false;
     return false;
 }
-void Runmachine(void)
-{
-   Serial.write(requestFrame01, sizeof(requestFrame01));
-   client.publish(mqtt_topic_cmd,"{\"t\":\"c\", \"v\":\"1\"}");
-}
 
-void Nextstep(void)
-{
-   Serial.write(requestFrame02, sizeof(requestFrame02));
-}
-void info(void){
-    Serial.write(requestFrame13, sizeof(requestFrame13));
-}
-void Mute(void )
-{
-   Serial.write(requestFrame03, sizeof(requestFrame03));
-} 
-void Takecoin1(void)
-{
-   Serial.write(requestFrame04, sizeof(requestFrame04));
-   client.publish(mqtt_topic_cmd,"{\"t\":\"m\", \"v\":\"1\"}");
-} 
-
-void Takecoin2(void)
-{
-   Serial.write(requestFrame05, sizeof(requestFrame05));
-   client.publish(mqtt_topic_cmd,"{\"t\":\"m\", \"v\":\"2\"}");
-
-} 
-
-void Takecoin3(void)
-{
-   Serial.write(requestFrame06, sizeof(requestFrame06));
-   client.publish(mqtt_topic_cmd,"{\"t\":\"m\", \"v\":\"3\"}");
-
-} 
-
-void Program1(void)
-{
-   Serial.write(requestFrame07, sizeof(requestFrame07));
-   client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"1\"}");
-
-} 
-
-void Program2(void )
-{
-   Serial.write(requestFrame08, sizeof(requestFrame08));
-      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"2\"}");
-
-} 
-
-void Program3(void)
-{
-   Serial.write(requestFrame09, sizeof(requestFrame09));
-      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"3\"}");
-
-} 
-
-void Program4(void )
-{
-   Serial.write(requestFrame10, sizeof(requestFrame10));
-      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"4\"}");
-
-} 
-
-void Program5(void)
-{
-   Serial.write(requestFrame11, sizeof(requestFrame11));
-      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"5\"}");
-
-} 
-
-void Program6(void)
-{
-   Serial.write(requestFrame12, sizeof(requestFrame12));
-      client.publish(mqtt_topic_cmd,"{\"t\":\"p\", \"v\":\"6\"}");
-
-} 
-// --- Khai báo các hàm ---
-void mqttCallback(char *topic, byte *payload, unsigned int length);
-void reconnect();
+// =================================================================
+// ==== HÀM XỬ LÝ MQTT VÀ CÁC TASK FreeRTOS ====
+// =================================================================
 
 // Hàm callback khi nhận được tin nhắn từ MQTT
 void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
-    Serial.print("Message arrived on topic: ");
-    Serial.println(topic);
-
     char message[length + 1];
     memcpy(message, payload, length);
     message[length] = '\0';
-    Serial.print("Message: ");
-    Serial.println(message);
+    Serial.printf("Message arrived on topic: %s. Message: %s\n", topic, message);
 
     if (strcmp(topic, mqtt_topic_control) == 0)
     {
-        Serial.print("Control command: ");
-        Serial.println(message);
-        StaticJsonDocument<128> control;
-        DeserializationError error = deserializeJson(control, payload, length);
-        const char *t_value = control["t"];
-        const char *v_value = control["v"];
-        if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "1") == 0)
-        {
-            
-            coinPulseLoopActive = false;
-            digitalWrite(COIN_PIN, HIGH);
-            Takecoin1();
-        }
-        else if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "2") == 0)
-        {
-            coinPulseLoopActive = true;
-            Takecoin2();
-        }
-        else if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "3") == 0)
-        {
-            coinPulseLoopActive = false;
-            digitalWrite(COIN_PIN, LOW);
-            Takecoin3();
-        }
-        else if (t_value && v_value && strcmp(t_value, "c") == 0 && strcmp(v_value, "1") == 0)
-        {
-            Runmachine();
-        }
-        else if (t_value && v_value && strcmp(t_value, "c") == 0 && strcmp(v_value, "0") == 0)
-        {
-
-        }
-        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "1") == 0)
-        {
-            Program1();
-        }
-        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "2") == 0)
-        {
-            Program2();
-        }
-        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "3") == 0)
-        {
-            Program3();
-        }   
-        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "4") == 0)
-        {   
-            Program4();
-        }    
-        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "5") == 0)
-        {   
-            Program5();
-        } 
-        else if (t_value && v_value && strcmp(t_value, "p") == 0 && strcmp(v_value, "6") == 0)
-        {
-            Program6();
-        }                                                     
-    }
-    else if (strcmp(topic, mqtt_topic_status) == 0)
-    {
         StaticJsonDocument<128> doc;
         DeserializationError error = deserializeJson(doc, payload, length);
-
-        if (error)
-        {
-            Serial.print("deserializeJson() failed: ");
-            Serial.println(error.c_str());
+        if (error) {
+            Serial.println("Failed to parse JSON");
             return;
         }
 
         const char *t_value = doc["t"];
         const char *v_value = doc["v"];
 
-        // KIỂM TRA QUAN TRỌNG: Đảm bảo cả hai con trỏ không phải là NULL trước khi dùng strcmp
-        if (t_value && v_value && strcmp(t_value, "i") == 0 && strcmp(v_value, "1") == 0)
-        {
-            Serial.print("Status command OK. Received: ");
-            char message[length + 1];
-            memcpy(message, payload, length);
-            message[length] = '\0';
-            Serial.println(message);
+        if (t_value && v_value) {
+            // Xử lý các hành động phụ đặc biệt cho lệnh 'm'
+            // if (strcmp(t_value, "m") == 0) {
+            //     if (strcmp(v_value, "1") == 0) {
+            //         digitalWrite(COIN_PIN, HIGH);
+            //     } else if (strcmp(v_value, "2") == 0) {
+            //         coinPulseLoopActive = true;
+            //     } else if (strcmp(v_value, "3") == 0) {
+            //         coinPulseLoopActive = false;
+            //         digitalWrite(COIN_PIN, LOW);
+            //     }
+            // }
+
+            // Gửi lệnh Modbus cho bất kỳ loại lệnh hợp lệ nào ('c', 'm', 'p')
+            if (strcmp(t_value, "c") == 0 || strcmp(t_value, "m") == 0 || strcmp(t_value, "p") == 0) {
+                sendMobus(t_value, v_value);
+            } else {
+                Serial.printf("Invalid command type 't': %s\n", t_value);
+            }
+
+        } else {
+            Serial.println("Invalid JSON format in control topic");
+        }
+    }
+    else if (strcmp(topic, mqtt_topic_status) == 0)
+    {
+        StaticJsonDocument<128> doc;
+        DeserializationError error = deserializeJson(doc, payload, length);
+        if (error) {
+            Serial.printf("deserializeJson() failed: %s\n", error.c_str());
+            return;
+        }
+
+        const char *t_value = doc["t"];
+        const char *v_value = doc["v"];
+        
+        if (t_value && v_value && strcmp(t_value, "i") == 0 && strcmp(v_value, "1") == 0) {
             client.publish(mqtt_topic_status, FIRMWARE_VERSION);
         }
-        else
-        {
-            // Cung cấp thông tin debug hữu ích khi lệnh không thành công
-            Serial.println("--- MQTT Command Failed ---");
+        if (t_value && v_value && strcmp(t_value, "s") == 0 && strcmp(v_value, "1") == 0) {
+                    int currentStatus = getMachineStatus();
+                    vTaskDelay(pdMS_TO_TICKS(200)); // Đợi một chút
+                    
+                    // Xóa buffer một lần nữa để chắc chắn
+                    while(Serial.available()) Serial.read();
 
-            char message[length + 1];
-            memcpy(message, payload, length);
-            message[length] = '\0';
-            Serial.print("Received payload: ");
-            Serial.println(message);
+                    bool infoReadSuccess = readAndParseMachineData();
 
-            if (!t_value)
-            {
-                Serial.println("Reason: JSON key 't' is missing or not a string.");
-            }
-            if (!v_value)
-            {
-                Serial.println("Reason: JSON key 'v' is not a string.");
-            }
-            Serial.println("---------------------------");
+                    StaticJsonDocument<256> docs;
+                    docs["s"] = (currentStatus == 1) ? 1 : 0;
+                    if (infoReadSuccess) {
+                        char v_buffer[100];
+                        sprintf(v_buffer, "%d,%d,%ld,%d", machineInfo.temperature, machineInfo.warningCount, machineInfo.totalCoins, machineInfo.runCount);
+                        docs["v"] = v_buffer;
+                        docs["st"] = 0;
+                    } else {
+                        docs["v"] = "0,0,0,0";
+                        docs["st"] = "02";
+                    }
+                    char jsonBuffer[256];
+                    serializeJson(docs, jsonBuffer);
+                    client.publish(mqtt_topic_info, jsonBuffer);
         }
     }
 }
 
-void reconnect()
-{
-    while (!client.connected())
-    {
-        Serial.print("Attempting MQTT connection...");
-        String clientId = "ESp_DLG";
-        if (client.connect(clientId.c_str()))
-        {
-            Serial.println("connected");
-            client.subscribe(mqtt_topic_cmd);
-            client.subscribe(mqtt_topic_control);
-            client.subscribe(mqtt_topic_info);
-            client.subscribe(mqtt_topic_status);
-            client.publish(mqtt_topic_status, FIRMWARE_VERSION, true);
-        }
-        else
-        {
-            Serial.print("failed, rc=");
-            Serial.print(client.state());
-            Serial.println(" try again in 5 seconds");
-            vTaskDelay(pdMS_TO_TICKS(5000));
-        }
-    }
-}
 
-// This function will be called when the BOOT pin transitions from LOW to HIGH (rising edge)
 void bootInterruptHandler()
 {
     Serial.println("Interupt ocur");
@@ -404,12 +365,12 @@ void task1Function(void *parameter)
     Serial.print(wifiState);
 }
 
-// QUẢN LÝ LED VÀ KIỂM TRA MẠNG =======
+
 void task2Function(void *parameter)
 {
     pinMode(LED_PIN, OUTPUT);
     long lastPingTime = 0;
-    const int pingInterval = 30000; // Kiểm tra ping mỗi 30 giây
+    const int pingInterval = 30000;
 
     while (true)
     {
@@ -418,42 +379,26 @@ void task2Function(void *parameter)
         case WIFI_CONNECTED:
             if (!connectWifiPing)
             {
-                digitalWrite(LED_PIN, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(300));
-                digitalWrite(LED_PIN, LOW);
-                vTaskDelay(pdMS_TO_TICKS(300));
-                digitalWrite(LED_PIN, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(300));
-                digitalWrite(LED_PIN, LOW);
-                vTaskDelay(pdMS_TO_TICKS(300));
+                digitalWrite(LED_PIN, HIGH); vTaskDelay(pdMS_TO_TICKS(300));
+                digitalWrite(LED_PIN, LOW); vTaskDelay(pdMS_TO_TICKS(300));
                 digitalWrite(LED_PIN, HIGH);
                 connectWifiPing = true;
             }
             if (millis() - lastPingTime > pingInterval)
             {
-                Serial.println("[Network] Dang kiem tra ket noi mang...");
-                if (!Ping.ping("www.google.com", 1))
-                {
-                    Serial.println("[Network] PING FAILED. Mat ket noi Internet.");
+                if (!Ping.ping("www.google.com", 1)) {
                     wifiState = WIFI_CONFIGURED_NOT_CONNECTED;
                 }
-                else
-                {
-                    Serial.println("[Network] Ping OK. Ket noi Internet on dinh.");
-                }
-                lastPingTime = millis(); // Cập nhật lại thời điểm ping cuối cùng
+                lastPingTime = millis();
             }
             vTaskDelay(pdMS_TO_TICKS(100));
             break;
-
         case WIFI_CONFIGURED_NOT_CONNECTED:
-            // Đã có cấu hình nhưng không kết nối được -> NHÁY CHẬM.
-            digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Đảo trạng thái LED
-            vTaskDelay(pdMS_TO_TICKS(1000));              // Nháy mỗi 1 giây
+            digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+            vTaskDelay(pdMS_TO_TICKS(1000));
             break;
-
         case WIFI_NOT_CONFIGURED:
-            digitalWrite(LED_PIN, LOW); // luôn sáng
+            digitalWrite(LED_PIN, LOW);
             vTaskDelay(pdMS_TO_TICKS(200));
             connectWifiPing = false;
             break;
@@ -465,41 +410,20 @@ void task3Function(void *parameter)
 {
     while (true)
     {
-        int buttonState = digitalRead(RST_PIN);
-
-        if (buttonState == LOW)
-        {
-            if (!press)
-            {
+        if (digitalRead(RST_PIN) == LOW) {
+            if (!press) {
                 press = true;
                 pressTime = millis();
-                digitalWrite(LED_PIN, LOW);
-                vTaskDelay(300);
-                digitalWrite(LED_PIN, HIGH);
-                vTaskDelay(300);
-                digitalWrite(LED_PIN, LOW);
-                vTaskDelay(300);
-                digitalWrite(LED_PIN, HIGH);
-                vTaskDelay(300);
-                digitalWrite(LED_PIN, LOW);
-                vTaskDelay(300);
-                digitalWrite(LED_PIN, HIGH);
-            }
-            else
-            {
-                if (millis() - pressTime >= 5000)
-                {
+            } else {
+                if (millis() - pressTime >= 5000) {
                     Serial.println(">>> Nut RST giu 5s, xoa WiFi <<<");
                     clearWiFiCredentials();
-                    press = false;
+                    press = false; // Reset cờ để tránh lặp lại
                 }
             }
-        }
-        else
-        {
+        } else {
             press = false;
         }
-
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
@@ -508,133 +432,74 @@ void task3Function(void *parameter)
 void task5Function(void *parameter)
 {
     long lastMsgTime = 0;
-    const int publishInterval = 90000; // Gửi tin nhắn mỗi 90 giây
+    const int publishInterval = 10000;
     long lastMqttAttempt = 0;
     long lastWifiReconnectAttempt = 0;
-    const int wifiReconnectInterval = 15000; // Thử lại Wi-Fi mỗi 15 giây
+    const int wifiReconnectInterval = 15000;
 
     while (true)
     {
-        if (WiFi.status() == WL_CONNECTED)
-        {
-            if (wifiState != WIFI_CONNECTED)
-            {
-                Serial.println("[Task 5] WiFi Connected!");
+        if (WiFi.status() == WL_CONNECTED) {
+            if (wifiState != WIFI_CONNECTED) {
                 wifiState = WIFI_CONNECTED;
             }
-            if (!client.connected())
-            {
-                if (millis() - lastMqttAttempt > 5000)
-                {
+            if (!client.connected()) {
+                if (millis() - lastMqttAttempt > 5000) {
                     Serial.print("Attempting MQTT connection...");
-                    String clientId = "ESp_DLG";
-                    if (client.connect(clientId.c_str()))
-                    {
+                    if (client.connect("TEWD43424O2X")) {
                         Serial.println("MQTT connected");
-                        // Subscribe lại các topic cần thiết
-                        client.subscribe(mqtt_topic_cmd);
                         client.subscribe(mqtt_topic_control);
-                        client.subscribe(mqtt_topic_info);
                         client.subscribe(mqtt_topic_status);
-                    }
-                    else
-                    {
-                        Serial.print("failed, rc=");
-                        Serial.println(client.state());
+                    } else {
+                        Serial.printf("failed, rc=%d\n", client.state());
                     }
                     lastMqttAttempt = millis();
                 }
-            }
-            else // Nếu MQTT đã kết nối thành công
-            {
+            } else {
                 client.loop();
+                if (millis() - lastMsgTime > publishInterval) {
+                    lastMsgTime = millis();
+                    
+                    // Xóa buffer trước khi thực hiện chuỗi giao tiếp mới
+                    while(Serial.available()) Serial.read();
 
-                long now = millis();
-                if (now - lastMsgTime > publishInterval)
-                {
-                    lastMsgTime = now;
-                    int currentStatus = -1;
-                    Serial.println("[Task 5] Reading machine data...");
-                    // Gọi hàm đọc và phân tích dữ liệu từ máy
-                    bool infoReadSuccess = false;
-                    currentStatus = getMachineStatus();
-                    infoReadSuccess = readAndParseMachineData();
-                    StaticJsonDocument<200> doc;    
-                    JsonObject obj = doc.to<JsonObject>();
-                    if (currentStatus){
-                        obj["s"] = 1; 
-                    }
-                    else obj["s"] = 0;
+                    int currentStatus = getMachineStatus();
+                    
+                    // Xóa buffer một lần nữa để chắc chắn
+                    while(Serial.available()) Serial.read();
+
+                    bool infoReadSuccess = readAndParseMachineData();
+
+                    StaticJsonDocument<256> doc;
+                    doc["s"] = (currentStatus == 1) ? 1 : 0;
                     if (infoReadSuccess) {
-                        
-                        String v_value = String(machineInfo.temperature) + "," + String(machineInfo.totalCoins) + "," + String(machineInfo.runCount);
-                        obj["v"] = v_value;
-                        obj["st"] = 0;
+                        char v_buffer[100];
+                        sprintf(v_buffer, "%d,%d,%ld,%d", machineInfo.temperature, machineInfo.warningCount, machineInfo.totalCoins, machineInfo.runCount);
+                        doc["v"] = v_buffer;
+                        doc["st"] = 0;
                     } else {
-                        obj["v"] = "0,0,0";
-                        obj["st"] = "02";
+                        doc["v"] = "0,0,0,0";
+                        doc["st"] = "02";
                     }
-                     char jsonBuffer[512];
-                     serializeJson(doc, jsonBuffer);
-                     client.publish(mqtt_topic_info, jsonBuffer);
-
-                     Serial.print("Published info: ");
-                      Serial.println(jsonBuffer);
-
-                      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-                      vTaskDelay(pdMS_TO_TICKS(100));
-                      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+                    char jsonBuffer[256];
+                    serializeJson(doc, jsonBuffer);
+                    client.publish(mqtt_topic_info, jsonBuffer);
+                    Serial.print("Published info: ");
+                    Serial.println(jsonBuffer);
                 }
             }
         }
-        // 2. XỬ LÝ KHI MẤT KẾT NỐI WIFI (ĐÃ CÓ CẤU HÌNH)
-        else if (wifiState == WIFI_CONFIGURED_NOT_CONNECTED)
-        {
-            // Nếu mất kết nối Wi-Fi, thử kết nối lại định kỳ
-            if (millis() - lastWifiReconnectAttempt > wifiReconnectInterval)
-            {
+        else if (wifiState == WIFI_CONFIGURED_NOT_CONNECTED) {
+            if (millis() - lastWifiReconnectAttempt > wifiReconnectInterval) {
                 Serial.println("[Task 5] WiFi lost. Attempting to reconnect...");
                 WiFi.reconnect();
-                digitalWrite(LED_PIN, LOW);
-                digitalWrite(LED_PIN, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(300));
-                digitalWrite(LED_PIN, LOW);
-                vTaskDelay(pdMS_TO_TICKS(300));
-                digitalWrite(LED_PIN, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(300));
-                digitalWrite(LED_PIN, LOW);
-                vTaskDelay(pdMS_TO_TICKS(300));
-                digitalWrite(LED_PIN, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(300));
-                digitalWrite(LED_PIN, LOW);
                 lastWifiReconnectAttempt = millis();
             }
         }
-
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
-void task6Function(void *parameter)
-{
-    while (true)
-    {
-        if (coinPulseLoopActive) // Nếu cờ được bật
-        {
-            digitalWrite(COIN_PIN, HIGH);
-            vTaskDelay(pdMS_TO_TICKS(5000)); // Nghỉ 5 giây
 
-            if (coinPulseLoopActive)
-            {
-                digitalWrite(COIN_PIN, LOW);
-                vTaskDelay(pdMS_TO_TICKS(55000)); // Nghỉ 55 giây
-            }
-        }
-        else // Nếu cờ đang tắt
-        {
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }
-    }
-}
 
 void setup()
 {
@@ -645,51 +510,18 @@ void setup()
     pinMode(BOOT_PIN, INPUT_PULLUP);
     pinMode(RST_PIN, INPUT_PULLUP);
     pinMode(LED_PIN, OUTPUT);
-    pinMode(COIN_PIN,OUTPUT);                                                       // Configure BOOT pin as input with internal pull-up resistor
-    attachInterrupt(digitalPinToInterrupt(BOOT_PIN), bootInterruptHandler, RISING); // Attach interrupt handler to rising edge of BOOT pin
-    Serial.println("All Done!");
+    pinMode(COIN_PIN,OUTPUT);
+    attachInterrupt(digitalPinToInterrupt(BOOT_PIN), bootInterruptHandler, RISING);
     client.setServer(mqtt_server, mqtt_port);
     client.setCallback(mqttCallback); 
 
-    xTaskCreate(
-        task1Function, // Task function
-        "Task 1",      // Task name
-        10000,         // Stack size (bytes)        //Interrupt mạng
-        NULL,          // Task parameters
-        1,             // Task priority
-        NULL           // Task handle
-    );
-    xTaskCreate(
-        task2Function, // Task function
-        "Task 2",      // Task name
-        10000,         // Stack size (bytes)        //Nháy led và ping check mạng
-        NULL,          // Task parameters
-        1,             // Task priority
-        NULL           // Task handle
-    );
-    xTaskCreate(
-        task3Function,
-        "Task 3",
-        10000, // Giữ 5 giây vào IO23 để reset mạng
-        NULL,
-        1,
-        NULL);
-
-    xTaskCreate(
-        task5Function,
-        "Task 5", /// MQTT
-        10000,
-        NULL,
-        1,
-        NULL);
-    xTaskCreate(
-        task6Function,
-        "Task 6", // Coin LOOP
-        10000,
-        NULL,
-        1,
-        NULL);
+    xTaskCreate(task1Function, "Task 1", 10000, NULL, 1, NULL); //Interrupt mạng
+    xTaskCreate(task2Function, "Task 2", 10000, NULL, 1, NULL); //Nháy led và ping check mạng
+    xTaskCreate(task3Function, "Task 3", 10000, NULL, 1, NULL); // Giữ 5 giây vào IO23 để reset mạng
+    xTaskCreate(task5Function, "Task 5", 10000, NULL, 1, NULL); // MQTT
 }
+
 void loop()
 {
+    // Để trống vì đã sử dụng FreeRTOS
 }
