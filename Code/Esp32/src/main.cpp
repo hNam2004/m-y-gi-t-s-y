@@ -9,36 +9,27 @@
 #include <Wire.h>
 #include <ESP32Ping.h>
 #include <ArduinoJson.h>
-
-// BAO GỒM MODULE MODBUS MỚI CỦA BẠN
 #include "readbyte.hpp"
 
-#define DEVICE_ID "TEWD43472L55"
+#define DEVICE_ID "1234"
 
-// --- Cấu hình MQTT ---
 const char *mqtt_server = "devices.koisolutions.vn";
 const int mqtt_port = 7183;
 const char *FIRMWARE_VERSION = "1.0.0";
 
 const char *mqtt_topic_info = "Kdev/" DEVICE_ID "/info";
-// --- ĐỊNH NGHĨA BIẾN TOÀN CỤC (mà readbyte.cpp cần) ---
 const char *mqtt_topic_cmd = "Kdev/" DEVICE_ID "/cmd";
-// ---
 const char *mqtt_topic_status = "Kdev/" DEVICE_ID "/status";
 const char *mqtt_topic_control = "Kdev/" DEVICE_ID "/control";
 
-// --- Cấu hình chân GPIO ---
 #define BOOT_PIN 99
 #define RST_PIN 23
 #define LED_PIN 21
 #define COIN_PIN 12
 #define IN_SIG2 18
 
-// --- Khai báo biến toàn cục ---
 WiFiClient espClient;
-// --- ĐỊNH NGHĨA BIẾN TOÀN CỤC (mà readbyte.cpp cần) ---
 PubSubClient client(espClient);
-// ---
 unsigned int pressTime = 0;
 bool press = false;
 TaskHandle_t task2_handle = NULL;
@@ -46,20 +37,8 @@ volatile uint8_t Interupt_Flag = 0;
 volatile bool connectWifiPing = false;
 
 
-// =================================================================
-// ==== CÁC HÀM XỬ LÝ MODBUS ĐÃ ĐƯỢC CHUYỂN SANG readbyte.cpp ====
-// (Toàn bộ code đã được xóa khỏi đây)
-// =================================================================
-
-
-// =================================================================
-// ==== HÀM XỬ LÝ MQTT VÀ CÁC TASK FreeRTOS ====
-// =================================================================
-
-// Hàm callback khi nhận được tin nhắn từ MQTT
 void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
-    // Logic callback gốc của bạn
     char message[length + 1];
     memcpy(message, payload, length);
     message[length] = '\0';
@@ -82,8 +61,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         {
             if (strcmp(t_value, "c") == 0 || strcmp(t_value, "m") == 0 || strcmp(t_value, "p") == 0)
             {
-                // GỌI HÀM TỪ readbyte.cpp
-                // Hàm này sẽ tự động dùng 'client' và 'mqtt_topic_cmd' toàn cục
+
                 sendMobus(t_value, v_value);
             }
             else if (strcmp(t_value, "s") == 0 && strcmp(v_value, "1") == 0)
@@ -92,14 +70,12 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                 sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
                 client.publish(mqtt_topic_cmd, jsonMsg); // 'client' và 'mqtt_topic_cmd' có sẵn
                 
-                // GỌI HÀM TỪ readbyte.cpp
                 int currentStatus = getMachineStatus();
                 vTaskDelay(pdMS_TO_TICKS(200));
                 
                 while (Serial.available())
                     Serial.read();
                 
-                // GỌI HÀM TỪ readbyte.cpp
                 bool infoReadSuccess = readAndParseMachineData();
                 StaticJsonDocument<256> docs;
                 docs["s"] = (currentStatus == 1) ? 1 : 0;
@@ -210,6 +186,22 @@ void task3Function(void *parameter)
     {
         if (digitalRead(RST_PIN) == LOW)
         {
+            digitalWrite(LED_PIN,LOW);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            digitalWrite(LED_PIN,HIGH);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            digitalWrite(LED_PIN,LOW);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            digitalWrite(LED_PIN,HIGH);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            digitalWrite(LED_PIN,LOW);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            digitalWrite(LED_PIN,HIGH);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            digitalWrite(LED_PIN,LOW);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            digitalWrite(LED_PIN,HIGH);
+            vTaskDelay(pdMS_TO_TICKS(300));
             if (!press)
             {
                 press = true;
@@ -327,11 +319,9 @@ void task5Function(void *parameter)
 
 void setup()
 {
-    // Giữ nguyên setup gốc
     Serial.begin(9600, SERIAL_8N1);
     delay(1000);
     
-    // KHÔNG CẦN GỌI modbus_init() NỮA
     
     sys_wifi_init();
     sys_capserver_init();

@@ -2,9 +2,8 @@
 #define READBYTE_HPP
 
 #include <Arduino.h>
-#include <PubSubClient.h> // Cần để khai báo 'extern client'
+#include <PubSubClient.h> 
 
-// --- Định nghĩa cấu trúc dữ liệu máy ---
 struct MachineData
 {
     int temperature;
@@ -16,16 +15,11 @@ struct MachineData
     bool isValid;
 };
 
-// --- KHAI BÁO BIẾN TOÀN CỤC (EXTERN) ---
-// Báo cho trình biên dịch biết rằng các biến này tồn tại ở một file .cpp khác (main.cpp)
+
 extern PubSubClient client;
 extern const char *mqtt_topic_cmd;
 
-// Biến này sẽ được ĐỊNH NGHĨA trong readbyte.cpp, nhưng main.cpp cần thấy nó
 extern MachineData machineInfo; 
-
-// --- KHAI BÁO CÁC HÀM ---
-// (Các hàm này sẽ được định nghĩa trong readbyte.cpp)
 
 unsigned int ModRTU_CRC(byte buf[], int len);
 void printByteAsBinary(byte data);
@@ -36,4 +30,4 @@ bool parseResponse(const byte *buffer, int len);
 int getMachineStatus();
 bool readAndParseMachineData();
 
-#endif // READBYTE_HPP
+#endif 
