@@ -164,7 +164,6 @@ bool parseResponse(const byte *buffer, int len)
     uint16_t seconds = (buffer[3 + 26] << 8) | buffer[3 + 27];
 
     machineInfo.totalCoins = (buffer[3 + 30] << 8) | buffer[3 + 31];
-
     machineInfo.coinsInBox = (buffer[3 + 70] << 8) | buffer[3 + 71];
 
     machineInfo.runCount = (buffer[3 + 72] << 8) | buffer[3 + 73];
