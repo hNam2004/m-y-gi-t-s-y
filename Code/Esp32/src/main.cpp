@@ -63,7 +63,26 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         {
             if (strcmp(t_value, "c") == 0 || strcmp(t_value, "m") == 0 || strcmp(t_value, "p") == 0)
             {
-                sendMobus(t_value, v_value);
+                if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "1") == 0)
+                {
+            
+                    digitalWrite(COIN_PIN, LOW);
+                }
+                else if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "2") == 0)
+                {
+                    digitalWrite(COIN_PIN, HIGH);
+                    vTaskDelay(pdMS_TO_TICKS(100)); // Nghỉ 5 giây
+                    digitalWrite(COIN_PIN, LOW);
+                }
+                else if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "3") == 0)
+                {
+                    digitalWrite(COIN_PIN, HIGH);
+                }
+
+                else
+                {
+                    sendMobus(t_value, v_value);
+                }
             }
             else if (strcmp(t_value, "s") == 0 && strcmp(v_value, "1") == 0)
             {
@@ -124,11 +143,6 @@ void task1Function(void *parameter)
     while (true)
     {
         sys_capserver_proc();
-        if (Interupt_Flag)
-        {
-            clearWiFiCredentials();
-            Interupt_Flag = 0;
-        }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     Serial.print(wifiState);
@@ -176,36 +190,66 @@ void task2Function(void *parameter)
         }
     }
 }
-
 void task3Function(void *parameter)
 {
+    unsigned long task3_lastBlinkTime = 0;
+    const int BLINK_INTERVAL = 150; // Tốc độ nháy LED (ms)
+    const int RESET_HOLD_TIME = 5000; // 5 giây
+
     while (true)
     {
-        if (digitalRead(RST_PIN) == LOW)
+        if (digitalRead(RST_PIN) == LOW) 
         {
             if (!press)
             {
-                press = true;
-                pressTime = millis();
+                press = true; 
+                pressTime = millis(); 
+                task3_lastBlinkTime = millis(); 
+                Serial.println("[Task 3] Bắt đầu giữ nút RST (timer 5s)...");
             }
-            else
+
+
+            if (millis() - task3_lastBlinkTime >= BLINK_INTERVAL)
             {
-                if (millis() - pressTime >= 5000)
+                digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Đảo trạng thái LED
+                task3_lastBlinkTime = millis();
+            }
+
+
+            if (press && (millis() - pressTime >= RESET_HOLD_TIME))
+            {
+                Serial.println("[Task 3] >>> Nut RST giu 5s, xoa WiFi <<<");
+                clearWiFiCredentials(); 
+                press = false; 
+
+                while (digitalRead(RST_PIN) == LOW)
                 {
-                    Serial.println(">>> Nut RST giu 5s, xoa WiFi <<<");
-                    clearWiFiCredentials();
-                    press = false; // Reset cờ để tránh lặp lại
+                    if (millis() - task3_lastBlinkTime >= BLINK_INTERVAL)
+                    {
+                        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+                        task3_lastBlinkTime = millis();
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(50));
                 }
             }
         }
-        else
+        else // Nút đang được thả (HIGH)
         {
-            press = false;
+            if (press)
+            {
+                Serial.println("[Task 3] Đã thả nút RST (trước 5s).");
+                digitalWrite(LED_PIN, HIGH); // Kéo LED lên HIGH theo yêu cầu
+            }
+            press = false; 
         }
+
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
+
+
+// --- Task 5 (MQTT & Modbus Polling) ---
 void task5Function(void *parameter)
 {
     // Logic gốc của bạn

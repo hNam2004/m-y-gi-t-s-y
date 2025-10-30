@@ -186,8 +186,79 @@ void sendMobus(const char *commandType, const char *commandValue)
     client.publish(mqtt_topic_cmd, jsonMsg);
 }
 
+<<<<<<< HEAD
+uint16_t calculateCRC_Response(const byte *data, int len)
+{
+    uint16_t crc = 0xFFFF;
+    for (int pos = 0; pos < len; pos++)
+    {
+        crc ^= (uint16_t)data[pos];
+        for (int i = 8; i != 0; i--)
+        {
+            if ((crc & 0x0001) != 0)
+            {
+                crc >>= 1;
+                crc ^= 0xA001;
+            }
+            else
+            {
+                crc >>= 1;
+            }
+        }
+    }
+    return (crc << 8) | (crc >> 8);
+}
+
+bool parseResponse(const byte *buffer, int len)
+{
+    if (len < 145)
+        return false;
+    if (buffer[0] != requestReadInfo[0] || buffer[1] != requestReadInfo[1])
+        return false;
+
+    int dataByteCount = buffer[2];
+    if (dataByteCount != 140)
+        return false;
+
+    if (len != 3 + dataByteCount + 2)
+        return false;
+
+    uint16_t receivedCRC = (buffer[len - 2] << 8) | buffer[len - 1];
+    uint16_t calculatedCRC = calculateCRC_Response(buffer, len - 2);
+    if (calculatedCRC != receivedCRC)
+    {
+        return false;
+    }
+
+    machineInfo.temperature = (buffer[3 + 4] << 8) | buffer[3 + 5];
+
+    machineInfo.warningCount = (buffer[3 + 10] << 8) | buffer[3 + 11];
+
+    uint16_t minutes = (buffer[3 + 24] << 8) | buffer[3 + 25];
+    uint16_t seconds = (buffer[3 + 26] << 8) | buffer[3 + 27];
+
+    machineInfo.totalCoins = (buffer[3 + 30] << 8) | buffer[3 + 31];
+    machineInfo.coinsInBox = (buffer[3 + 70] << 8) | buffer[3 + 71];
+
+    machineInfo.runCount = (buffer[3 + 72] << 8) | buffer[3 + 73];
+
+    int modelStartIndex = 3 + 82;
+    int modelLen = 0;
+    while (modelLen < 19 && (modelStartIndex + modelLen) < (len - 2) && buffer[modelStartIndex + modelLen] != 0)
+    {
+        machineInfo.modelName[modelLen] = (char)buffer[modelStartIndex + modelLen];
+        modelLen++;
+    }
+    machineInfo.modelName[modelLen] = '\0';
+
+    machineInfo.isValid = true;
+    return true;
+}
+
+=======
 // (Tôi đã bỏ hàm calculateCRC_Response() của bạn vì nó không chuẩn
 // và đã sửa lại hàm getMachineStatus để dùng ModRTU_CRC() )
+>>>>>>> 7e33170f287134d57d6ad1dda1b8273d221c5467
 int getMachineStatus()
 {
     Serial.write(requestReadStatus, sizeof(requestReadStatus));
