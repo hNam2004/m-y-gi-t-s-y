@@ -10,6 +10,7 @@
 #include <ESP32Ping.h>
 #include <ArduinoJson.h>
 #include "readbyte.hpp"
+
 #define DEVICE_ID "TEWD43424O2X"
 
 const char *mqtt_server = "devices.koisolutions.vn";
@@ -27,7 +28,6 @@ const char *mqtt_topic_control = "Kdev/" DEVICE_ID "/control";
 #define LED_PIN 21
 #define COIN_PIN 12
 
-// --- Khai báo biến toàn cục ---
 WiFiClient espClient;
 PubSubClient client(espClient);
 unsigned int pressTime = 0;
@@ -69,7 +69,8 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
             {
                 char jsonMsg[50];
                 sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
-                client.publish(mqtt_topic_cmd, jsonMsg);
+                client.publish(mqtt_topic_cmd, jsonMsg); // 'client' và 'mqtt_topic_cmd' có sẵn
+                
                 int currentStatus = getMachineStatus();
                 vTaskDelay(pdMS_TO_TICKS(200));
                 while (Serial.available())
@@ -98,8 +99,6 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                 char jsonMsg[50];
                 sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
                 client.publish(mqtt_topic_cmd, jsonMsg);
-
-                // 2. Gửi phiên bản firmware lên INFO
                 client.publish(mqtt_topic_info, FIRMWARE_VERSION);
             }
             else
@@ -209,6 +208,7 @@ void task3Function(void *parameter)
 
 void task5Function(void *parameter)
 {
+    // Logic gốc của bạn
     long lastMsgTime = 0;
     const int publishInterval = 3000;
     long lastMqttAttempt = 0;
@@ -252,12 +252,20 @@ void task5Function(void *parameter)
                     while (Serial.available())
                         Serial.read();
 
+                    while (Serial.available())
+                        Serial.read();
+
+                    // GỌI HÀM TỪ readbyte.cpp
                     int currentStatus = getMachineStatus();
 
                     // Xóa buffer một lần nữa để chắc chắn
                     while (Serial.available())
                         Serial.read();
 
+                    while (Serial.available())
+                        Serial.read();
+
+                    // GỌI HÀM TỪ readbyte.cpp
                     bool infoReadSuccess = readAndParseMachineData();
 
                     StaticJsonDocument<256> doc;
@@ -299,6 +307,8 @@ void setup()
 {
     Serial.begin(9600, SERIAL_8N1);
     delay(1000);
+    
+    
     sys_wifi_init();
     sys_capserver_init();
     pinMode(BOOT_PIN, INPUT_PULLUP);
