@@ -11,7 +11,7 @@
 #include <ArduinoJson.h>
 #include "readbyte.hpp"
 
-#define DEVICE_ID "1234"
+#define DEVICE_ID "TEWD43424O2X"
 
 const char *mqtt_server = "devices.koisolutions.vn";
 const int mqtt_port = 7183;
@@ -22,11 +22,11 @@ const char *mqtt_topic_cmd = "Kdev/" DEVICE_ID "/cmd";
 const char *mqtt_topic_status = "Kdev/" DEVICE_ID "/status";
 const char *mqtt_topic_control = "Kdev/" DEVICE_ID "/control";
 
+// --- Cấu hình chân GPIO ---
 #define BOOT_PIN 99
 #define RST_PIN 23
 #define LED_PIN 21
 #define COIN_PIN 12
-#define IN_SIG2 18
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -37,6 +37,8 @@ volatile uint8_t Interupt_Flag = 0;
 volatile bool connectWifiPing = false;
 
 
+
+// Hàm callback khi nhận được tin nhắn từ MQTT
 void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
     char message[length + 1];
@@ -61,7 +63,6 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         {
             if (strcmp(t_value, "c") == 0 || strcmp(t_value, "m") == 0 || strcmp(t_value, "p") == 0)
             {
-
                 sendMobus(t_value, v_value);
             }
             else if (strcmp(t_value, "s") == 0 && strcmp(v_value, "1") == 0)
@@ -72,17 +73,14 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                 
                 int currentStatus = getMachineStatus();
                 vTaskDelay(pdMS_TO_TICKS(200));
-                
                 while (Serial.available())
                     Serial.read();
-                
                 bool infoReadSuccess = readAndParseMachineData();
                 StaticJsonDocument<256> docs;
                 docs["s"] = (currentStatus == 1) ? 1 : 0;
                 if (infoReadSuccess)
                 {
                     char v_buffer[100];
-                    // DÙNG BIẾN 'machineInfo' (từ readbyte.cpp)
                     sprintf(v_buffer, "%d,0,0,0", machineInfo.temperature);
                     docs["v"] = v_buffer;
                     docs["st"] = 0;
@@ -115,7 +113,6 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     }
 }
 
-// ... (Các hàm task1, task2, task3, bootInterruptHandler giữ nguyên) ...
 void bootInterruptHandler()
 {
     Serial.println("Interupt ocur");
@@ -186,22 +183,6 @@ void task3Function(void *parameter)
     {
         if (digitalRead(RST_PIN) == LOW)
         {
-            digitalWrite(LED_PIN,LOW);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            digitalWrite(LED_PIN,HIGH);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            digitalWrite(LED_PIN,LOW);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            digitalWrite(LED_PIN,HIGH);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            digitalWrite(LED_PIN,LOW);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            digitalWrite(LED_PIN,HIGH);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            digitalWrite(LED_PIN,LOW);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            digitalWrite(LED_PIN,HIGH);
-            vTaskDelay(pdMS_TO_TICKS(300));
             if (!press)
             {
                 press = true;
@@ -225,8 +206,6 @@ void task3Function(void *parameter)
     }
 }
 
-
-// --- Task 5 (MQTT & Modbus Polling) ---
 void task5Function(void *parameter)
 {
     // Logic gốc của bạn
@@ -269,11 +248,19 @@ void task5Function(void *parameter)
                 {
                     lastMsgTime = millis();
 
+                    // Xóa buffer trước khi thực hiện chuỗi giao tiếp mới
+                    while (Serial.available())
+                        Serial.read();
+
                     while (Serial.available())
                         Serial.read();
 
                     // GỌI HÀM TỪ readbyte.cpp
                     int currentStatus = getMachineStatus();
+
+                    // Xóa buffer một lần nữa để chắc chắn
+                    while (Serial.available())
+                        Serial.read();
 
                     while (Serial.available())
                         Serial.read();
@@ -286,7 +273,6 @@ void task5Function(void *parameter)
                     if (infoReadSuccess)
                     {
                         char v_buffer[100];
-                        // DÙNG BIẾN 'machineInfo' (từ readbyte.cpp)
                         sprintf(v_buffer, "%d,0,0,0", machineInfo.temperature);
                         doc["v"] = v_buffer;
                         doc["st"] = 0;
@@ -333,10 +319,10 @@ void setup()
     client.setServer(mqtt_server, mqtt_port);
     client.setCallback(mqttCallback);
 
-    xTaskCreate(task1Function, "Task 1", 10000, NULL, 1, NULL); 
-    xTaskCreate(task2Function, "Task 2", 10000, NULL, 1, NULL); 
-    xTaskCreate(task3Function, "Task 3", 10000, NULL, 1, NULL); 
-    xTaskCreate(task5Function, "Task 5", 10000, NULL, 1, NULL); 
+    xTaskCreate(task1Function, "Task 1", 10000, NULL, 1, NULL); // Interrupt mạng
+    xTaskCreate(task2Function, "Task 2", 10000, NULL, 1, NULL); // Nháy led và ping check mạng
+    xTaskCreate(task3Function, "Task 3", 10000, NULL, 1, NULL); // Giữ 5 giây vào IO23 để reset mạng
+    xTaskCreate(task5Function, "Task 5", 10000, NULL, 1, NULL); // MQTT
 }
 
 void loop()
