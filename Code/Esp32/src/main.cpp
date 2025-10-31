@@ -9,18 +9,17 @@
 #include <Wire.h>
 #include <ESP32Ping.h>
 #include <ArduinoJson.h>
-#include <Preferences.h>
-// --- Cấu hình thiết bị (sẽ được load từ Preferences) ---
-char deviceID[32];
-char mqttServer[100];
+
+#define DEVICE_ID "TEWD43472L55"
+
+const char *mqtt_server = "devices.koisolutions.vn";
 const int mqtt_port = 7183;
 const char *FIRMWARE_VERSION = "1.0.0";
 
-// --- Các topic MQTT (sẽ được xây dựng tự động) ---
-char mqtt_topic_info[150];
-char mqtt_topic_cmd[150];
-char mqtt_topic_status[150];
-char mqtt_topic_control[150];
+const char *mqtt_topic_info = "Kdev/" DEVICE_ID "/info";
+const char *mqtt_topic_cmd = "Kdev/" DEVICE_ID "/cmd";
+const char *mqtt_topic_status = "Kdev/" DEVICE_ID "/status";
+const char *mqtt_topic_control = "Kdev/" DEVICE_ID "/control";
 
 // --- Cấu hình chân GPIO ---
 #define BOOT_PIN 99
@@ -30,8 +29,6 @@ char mqtt_topic_control[150];
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-Preferences preferences;
-String serialCmdBuffer = "";
 unsigned int pressTime = 0;
 bool press = false;
 TaskHandle_t task2_handle = NULL;
@@ -182,7 +179,6 @@ void sendMobus(const char *commandType, const char *commandValue)
     // (Giả sử 'client' và 'mqtt_topic_cmd' tồn tại)
     char jsonMsg[50];
     sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", commandType, commandValue);
-
     client.publish(mqtt_topic_cmd, jsonMsg);
 }
 
@@ -260,17 +256,14 @@ int getMachineStatus()
         }
     }
 
-    if (bytesRead >= 12)
+    if (bytesRead >= 6)
     {
+        byte statusByte = statusBuffer[6];
         uint16_t receivedCRC = (statusBuffer[bytesRead - 2] << 8) | statusBuffer[bytesRead - 1];
         if (calculateCRC_Response(statusBuffer, bytesRead - 2) == receivedCRC)
         {
-            int statusSum = statusBuffer[6] + statusBuffer[9];
-
-            if (statusSum != 0)
-            {
-                return 1;
-            }
+            if (statusByte!= 0x00)
+                return 1; // Máy đang chạy
             else
                 return 0; // Máy đang dừng
         }
@@ -283,145 +276,22 @@ bool readAndParseMachineData()
     Serial.write(requestReadInfo, sizeof(requestReadInfo));
     unsigned long startTime = millis();
     int bytesRead = 0;
-
-#define FC03_EXPECTED_DATA_BYTES 140
-#define FC03_FULL_RESPONSE_LENGTH (3 + FC03_EXPECTED_DATA_BYTES + 2)
-
-    int expectedLength = FC03_FULL_RESPONSE_LENGTH;
-
-    while (millis() - startTime < 1000)
+    while (millis() - startTime < 500 && bytesRead < RESPONSE_BUFFER_SIZE)
     {
         if (Serial.available())
         {
-            if (bytesRead < RESPONSE_BUFFER_SIZE)
-            {
-                responseBuffer[bytesRead++] = Serial.read();
-            }
-            else
-            {
-                while (Serial.available())
-                    Serial.read();
-                break;
-            }
-        }
-        if (bytesRead == expectedLength)
-        {
-            break;
+            responseBuffer[bytesRead++] = Serial.read();
         }
     }
 
-    if (bytesRead == expectedLength)
+    if (bytesRead > 0)
     {
         return parseResponse(responseBuffer, bytesRead);
     }
-
     machineInfo.isValid = false;
     return false;
 }
-void buildMqttTopics()
-{
-    sprintf(mqtt_topic_info, "Kdev/%s/info", deviceID);
-    sprintf(mqtt_topic_cmd, "Kdev/%s/cmd", deviceID);
-    sprintf(mqtt_topic_status, "Kdev/%s/status", deviceID);
-    sprintf(mqtt_topic_control, "Kdev/%s/control", deviceID);
 
-    Serial.println("--- MQTT Topics Đã Xây Dựng ---");
-    Serial.printf("Info: %s\n", mqtt_topic_info);
-    Serial.printf("Control: %s\n", mqtt_topic_control);
-    Serial.println("-------------------------------");
-}
-
-/**
- * @brief Lưu giá trị mới vào Preferences và khởi động lại.
- */
-void saveAndRestart(const char* key, String value)
-{
-    preferences.begin("config", false); // Mở namespace 'config' ở chế độ read-write
-    preferences.putString(key, value);
-    preferences.end();
-
-    Serial.printf("Đã lưu %s = %s\n", key, value.c_str());
-    Serial.println("Khởi động lại sau 2 giây...");
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    ESP.restart();
-}
-
-/**
- * @brief Tải cấu hình từ Preferences vào các biến toàn cục.
- * Được gọi trong setup().
- */
-void loadConfig()
-{
-    preferences.begin("config", true); // Mở namespace 'config' ở chế độ read-only
-    
-    // Tải Device ID, nếu không có thì dùng "1234"
-    String id = preferences.getString("deviceID", "1234");
-    // Tải MQTT Server, nếu không có thì dùng "devices.koisolutions.vn"
-    String server = preferences.getString("mqttServer", "devices.koisolutions.vn");
-    
-    preferences.end();
-
-    // Sao chép vào các biến char array toàn cục
-    strcpy(deviceID, id.c_str());
-    strcpy(mqttServer, server.c_str());
-
-    Serial.println("--- Cấu Hình Đã Tải ---");
-    Serial.printf("Device ID: %s\n", deviceID);
-    Serial.printf("MQTT Server: %s\n", mqttServer);
-    Serial.println("-------------------------");
-
-    // Xây dựng các topic MQTT sau khi đã có deviceID
-    buildMqttTopics();
-}
-
-/**
- * @brief Kiểm tra và xử lý các lệnh đến từ Serial.
- * Sẽ được gọi liên tục trong một task (ví dụ Task 5).
- */
-void checkSerialCommands()
-{
-    while (Serial.available())
-    {
-        char c = Serial.read();
-        if (c == '\n' || c == '\r') // Khi nhấn Enter
-        {
-            serialCmdBuffer.trim(); // Xóa khoảng trắng
-            if (serialCmdBuffer.length() > 0)
-            {
-                Serial.printf("[Serial CMD] Nhận được: %s\n", serialCmdBuffer.c_str());
-
-                // Phân tích lệnh
-                if (serialCmdBuffer.startsWith("ID_"))
-                {
-                    String newID = serialCmdBuffer.substring(3); // Lấy phần sau "ID_"
-                    if (newID.length() > 0) {
-                        saveAndRestart("deviceID", newID); // Hàm này sẽ tự restart
-                    } else {
-                        Serial.println("Lỗi: ID không được rỗng.");
-                    }
-                }
-                else if (serialCmdBuffer.startsWith("SV_"))
-                {
-                    String newServer = serialCmdBuffer.substring(3); // Lấy phần sau "SV_"
-                     if (newServer.length() > 0) {
-                        saveAndRestart("mqttServer", newServer); // Hàm này sẽ tự restart
-                    } else {
-                        Serial.println("Lỗi: Server không được rỗng.");
-                    }
-                }
-                else
-                {
-                    Serial.println("Lỗi: Lệnh không xác định. Dùng: ID_<value> hoặc SV_<value>");
-                }
-            }
-            serialCmdBuffer = ""; // Xóa buffer cho lệnh tiếp theo
-        }
-        else if (isPrintable(c)) // Chỉ thêm các ký tự in được
-        {
-            serialCmdBuffer += c;
-        }
-    }
-}
 // =================================================================
 // ==== HÀM XỬ LÝ MQTT VÀ CÁC TASK FreeRTOS ====
 // =================================================================
@@ -451,36 +321,13 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         {
             if (strcmp(t_value, "c") == 0 || strcmp(t_value, "m") == 0 || strcmp(t_value, "p") == 0)
             {
-                if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "1") == 0)
-                {
-                    sendMobus(t_value, v_value);
-                    digitalWrite(COIN_PIN, LOW);
-                    
-                }
-                else if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "2") == 0)
-                {
-                    sendMobus(t_value, v_value);
-                    digitalWrite(COIN_PIN, HIGH);
-                    vTaskDelay(pdMS_TO_TICKS(100)); // Nghỉ 5 giây
-                    digitalWrite(COIN_PIN, LOW);
-                }
-                else if (t_value && v_value && strcmp(t_value, "m") == 0 && strcmp(v_value, "3") == 0)
-                {
-                    sendMobus(t_value, v_value);
-                    digitalWrite(COIN_PIN, HIGH);
-                }
-
-                else
-                {
-                    sendMobus(t_value, v_value);
-                }
+                sendMobus(t_value, v_value);
             }
             else if (strcmp(t_value, "s") == 0 && strcmp(v_value, "1") == 0)
             {
                 char jsonMsg[50];
                 sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
-                client.publish(mqtt_topic_cmd, jsonMsg); // 'client' và 'mqtt_topic_cmd' có sẵn
-                
+                client.publish(mqtt_topic_cmd, jsonMsg);
                 int currentStatus = getMachineStatus();
                 vTaskDelay(pdMS_TO_TICKS(200));
                 while (Serial.available())
@@ -509,6 +356,8 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                 char jsonMsg[50];
                 sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
                 client.publish(mqtt_topic_cmd, jsonMsg);
+
+                // 2. Gửi phiên bản firmware lên INFO
                 client.publish(mqtt_topic_info, FIRMWARE_VERSION);
             }
             else
@@ -522,7 +371,6 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         }
     }
 }
-
 
 void bootInterruptHandler()
 {
@@ -584,61 +432,32 @@ void task2Function(void *parameter)
 }
 void task3Function(void *parameter)
 {
-    unsigned long task3_lastBlinkTime = 0;
-    const int BLINK_INTERVAL = 150; // Tốc độ nháy LED (ms)
-    const int RESET_HOLD_TIME = 5000; // 5 giây
-
     while (true)
     {
-        if (digitalRead(RST_PIN) == LOW) 
+        if (digitalRead(RST_PIN) == LOW)
         {
             if (!press)
             {
-                press = true; 
-                pressTime = millis(); 
-                task3_lastBlinkTime = millis(); 
-                Serial.println("[Task 3] Bắt đầu giữ nút RST (timer 5s)...");
+                press = true;
+                pressTime = millis();
             }
-
-
-            if (millis() - task3_lastBlinkTime >= BLINK_INTERVAL)
+            else
             {
-                digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Đảo trạng thái LED
-                task3_lastBlinkTime = millis();
-            }
-
-
-            if (press && (millis() - pressTime >= RESET_HOLD_TIME))
-            {
-                Serial.println("[Task 3] >>> Nut RST giu 5s, xoa WiFi <<<");
-                clearWiFiCredentials(); 
-                press = false; 
-
-                while (digitalRead(RST_PIN) == LOW)
+                if (millis() - pressTime >= 5000)
                 {
-                    if (millis() - task3_lastBlinkTime >= BLINK_INTERVAL)
-                    {
-                        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-                        task3_lastBlinkTime = millis();
-                    }
-                    vTaskDelay(pdMS_TO_TICKS(50));
+                    Serial.println(">>> Nut RST giu 5s, xoa WiFi <<<");
+                    clearWiFiCredentials();
+                    press = false; // Reset cờ để tránh lặp lại
                 }
             }
         }
-        else // Nút đang được thả (HIGH)
+        else
         {
-            if (press)
-            {
-                Serial.println("[Task 3] Đã thả nút RST (trước 5s).");
-                digitalWrite(LED_PIN, HIGH); // Kéo LED lên HIGH theo yêu cầu
-            }
-            press = false; 
+            press = false;
         }
-
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
-
 
 void task5Function(void *parameter)
 {
@@ -651,7 +470,6 @@ void task5Function(void *parameter)
 
     while (true)
     {
-        checkSerialCommands();
         if (WiFi.status() == WL_CONNECTED)
         {
             if (wifiState != WIFI_CONNECTED)
@@ -663,7 +481,7 @@ void task5Function(void *parameter)
                 if (millis() - lastMqttAttempt > 5000)
                 {
                     Serial.print("Attempting MQTT connection...");
-                    if (client.connect(deviceID))
+                    if (client.connect(DEVICE_ID))
                     {
                         Serial.println("MQTT connected");
                         client.subscribe(mqtt_topic_control);
@@ -742,7 +560,6 @@ void setup()
 {
     Serial.begin(9600, SERIAL_8N1);
     delay(1000);
-    loadConfig();
     sys_wifi_init();
     sys_capserver_init();
     pinMode(BOOT_PIN, INPUT_PULLUP);
@@ -750,7 +567,7 @@ void setup()
     pinMode(LED_PIN, OUTPUT);
     pinMode(COIN_PIN, OUTPUT);
     attachInterrupt(digitalPinToInterrupt(BOOT_PIN), bootInterruptHandler, RISING);
-    client.setServer(mqttServer, mqtt_port);
+    client.setServer(mqtt_server, mqtt_port);
     client.setCallback(mqttCallback);
 
     xTaskCreate(task1Function, "Task 1", 10000, NULL, 1, NULL); // Interrupt mạng
