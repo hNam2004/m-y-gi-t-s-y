@@ -542,11 +542,7 @@ void task1Function(void *parameter)
     while (true)
     {
         sys_capserver_proc();
-        if (Interupt_Flag)
-        {
-            clearWiFiCredentials();
-            Interupt_Flag = 0;
-        }
+        
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     Serial.print(wifiState);
@@ -753,7 +749,6 @@ void setup()
     pinMode(RST_PIN, INPUT_PULLUP);
     pinMode(LED_PIN, OUTPUT);
     pinMode(COIN_PIN, OUTPUT);
-    attachInterrupt(digitalPinToInterrupt(BOOT_PIN), bootInterruptHandler, RISING);
     client.setServer(mqttServer, mqtt_port);
     client.setCallback(mqttCallback);
 
