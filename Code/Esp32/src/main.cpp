@@ -27,7 +27,9 @@ char mqtt_topic_control[150];
 #define RST_PIN 23
 #define LED_PIN 21
 #define COIN_PIN 12
+#define IN_SIG2 18
 
+// --- Khai báo biến toàn cục ---
 WiFiClient espClient;
 PubSubClient client(espClient);
 Preferences preferences;
@@ -38,6 +40,11 @@ TaskHandle_t task2_handle = NULL;
 volatile uint8_t Interupt_Flag = 0;
 volatile bool connectWifiPing = false;
 
+// --- Khai báo các lệnh Modbus cố định ---
+// Lệnh đọc thông tin máy (đọc nhiều thanh ghi)
+byte requestReadInfo[] = {0x01, 0x03, 0x03, 0x20, 0x00, 0x46, 0xC5, 0xB6};
+// Lệnh đọc trạng thái máy (đọc coil)
+byte requestReadStatus[] = {0x01, 0x01, 0x00, 0x00, 0x00, 0xA0, 0x3C, 0x72};
 
 // --- Buffer và Struct cho dữ liệu máy ---
 const int RESPONSE_BUFFER_SIZE = 145;
@@ -535,6 +542,11 @@ void task1Function(void *parameter)
     while (true)
     {
         sys_capserver_proc();
+        if (Interupt_Flag)
+        {
+            clearWiFiCredentials();
+            Interupt_Flag = 0;
+        }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     Serial.print(wifiState);
@@ -582,6 +594,7 @@ void task2Function(void *parameter)
         }
     }
 }
+
 void task3Function(void *parameter)
 {
     unsigned long task3_lastBlinkTime = 0;
@@ -642,7 +655,6 @@ void task3Function(void *parameter)
 
 void task5Function(void *parameter)
 {
-    // Logic gốc của bạn
     long lastMsgTime = 0;
     const int publishInterval = 3000;
     long lastMqttAttempt = 0;
@@ -687,20 +699,12 @@ void task5Function(void *parameter)
                     while (Serial.available())
                         Serial.read();
 
-                    while (Serial.available())
-                        Serial.read();
-
-                    // GỌI HÀM TỪ readbyte.cpp
                     int currentStatus = getMachineStatus();
 
                     // Xóa buffer một lần nữa để chắc chắn
                     while (Serial.available())
                         Serial.read();
 
-                    while (Serial.available())
-                        Serial.read();
-
-                    // GỌI HÀM TỪ readbyte.cpp
                     bool infoReadSuccess = readAndParseMachineData();
 
                     StaticJsonDocument<256> doc;
