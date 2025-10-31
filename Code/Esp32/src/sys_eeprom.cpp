@@ -3,10 +3,9 @@
 
 char sys_eeprom_ssid[MAX_SSID_LENGTH];
 char sys_eeprom_password[MAX_PASSWORD_LENGTH];
-char sys_eeprom_device_id[MAX_DEVICE_ID_LENGTH];
-char sys_eeprom_server[MAX_SERVER_LENGTH];
 
 void clearWiFiCredentialsInEEPROM() {
+    EEPROM.begin(512);
     
     // Clear SSID
     for (int i = 0; i < MAX_SSID_LENGTH; i++) {
@@ -20,34 +19,11 @@ void clearWiFiCredentialsInEEPROM() {
 
     EEPROM.commit();
 }
-void readConfigFromEEPROM()
-{
 
-    // Read DEVICE_ID
-    for (int i = 0; i < MAX_DEVICE_ID_LENGTH; i++)
-    {
-        sys_eeprom_device_id[i] = EEPROM.read(DEVICE_ID_EEPROM_ADDR + i);
-        if (sys_eeprom_device_id[i] == '\0')
-        {
-            break;
-        }
-    }
-    
-    sys_eeprom_device_id[MAX_DEVICE_ID_LENGTH - 1] = '\0';
 
-    for (int i = 0; i < MAX_SERVER_LENGTH; i++)
-    {
-        sys_eeprom_server[i] = EEPROM.read(SERVER_EEPROM_ADDR + i);
-        if (sys_eeprom_server[i] == '\0')
-        {
-            break;
-        }
-    }
-    sys_eeprom_server[MAX_SERVER_LENGTH - 1] = '\0';
-
-}
 void readWiFiCredentialsFromEEPROM()
 {
+    EEPROM.begin(512);
     for (int i = 0; i < MAX_SSID_LENGTH; i++)
     {
         sys_eeprom_ssid[i] = EEPROM.read(SSID_EEPROM_ADDR + i);
@@ -66,31 +42,7 @@ void readWiFiCredentialsFromEEPROM()
         }
     }
 }
-void saveConfigToEEPROM(const char *device_id, const char *mqtt_server)
-{
-    
-    // Ghi DEVICE_ID
-    int id_len = strnlen(device_id, MAX_DEVICE_ID_LENGTH - 1); // Tránh tràn bộ nhớ
-    for (int i = 0; i < MAX_DEVICE_ID_LENGTH; i++)
-    {
-        char data = (i <= id_len) ? device_id[i] : '\0'; // Thêm null sau khi ghi
-        EEPROM.write(DEVICE_ID_EEPROM_ADDR + i, data);
-        sys_eeprom_device_id[i] = data;
-        if (data == '\0') break;
-    }
 
-    // Ghi MQTT_SERVER
-    int server_len = strnlen(mqtt_server, MAX_SERVER_LENGTH - 1);
-    for (int i = 0; i < MAX_SERVER_LENGTH; i++)
-    {
-        char data = (i <= server_len) ? mqtt_server[i] : '\0';
-        EEPROM.write(SERVER_EEPROM_ADDR + i, data);
-        sys_eeprom_server[i] = data;
-        if (data == '\0') break;
-    }
-
-    EEPROM.commit(); // Ghi dữ liệu thực sự vào Flash
-}
 void saveWiFiCredentialsToEEPROM(const char *ssid, const char *password)
 {
     for (int i = 0; i < MAX_SSID_LENGTH; i++)
@@ -115,4 +67,3 @@ void saveWiFiCredentialsToEEPROM(const char *ssid, const char *password)
 
     EEPROM.commit();
 }
-
