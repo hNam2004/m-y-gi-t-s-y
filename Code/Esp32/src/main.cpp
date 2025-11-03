@@ -287,7 +287,7 @@ void task5Function(void *parameter)
                     {
                         char v_buffer[100];
                         // DÙNG BIẾN 'machineInfo' (từ readbyte.cpp)
-                        sprintf(v_buffer, "%d,0,0,0", machineInfo.temperature);
+                        sprintf(v_buffer, "%d,0,%d,0", machineInfo.temperature, machineInfo.coinsInBox);
                         doc["v"] = v_buffer;
                         doc["st"] = 0;
                     }

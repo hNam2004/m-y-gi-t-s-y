@@ -55,7 +55,7 @@ void sys_wifi_init()
         Serial.println("No WiFi credentials found. Please configure WiFi.");
         Serial.println("\n Restarting AP mode...");
         WiFi.mode(WIFI_AP);
-        WiFi.softAP("TEWD43472L55");
+        WiFi.softAP("1234");
         Serial.print("AP IP address: ");
         Serial.println(WiFi.softAPIP());
     }

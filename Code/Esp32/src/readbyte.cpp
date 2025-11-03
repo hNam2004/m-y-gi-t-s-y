@@ -165,9 +165,21 @@ bool parseResponse(const byte *buffer, int len)
 
     machineInfo.totalCoins = (buffer[3 + 30] << 8) | buffer[3 + 31];
 
-    machineInfo.coinsInBox = (buffer[3 + 70] << 8) | buffer[3 + 71];
+    uint16_t conditionValue = (buffer[3 + 66] << 8) | buffer[3 + 67];
+    
+    // 2. Kiểm tra điều kiện
+    if (conditionValue > 8)
+    {
+        // 3. Nếu đúng, gán giá trị tại 68-69 cho coinsInBox
+        machineInfo.coinsInBox = (buffer[3 + 68] << 8) | buffer[3 + 69];
+    }
+    else
+    {
+        // 4. Nếu sai, gán giá trị mặc định (ví dụ: 0)
+        machineInfo.coinsInBox = conditionValue;
+    }
 
-    machineInfo.runCount = (buffer[3 + 72] << 8) | buffer[3 + 73];
+    // machineInfo.runCount = (buffer[3 + 72] << 8) | buffer[3 + 73];
 
     int modelStartIndex = 3 + 82;
     int modelLen = 0;
