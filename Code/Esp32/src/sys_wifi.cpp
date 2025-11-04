@@ -30,6 +30,7 @@ void connectToWiFi(const char *ssid, const char *password)
         digitalWrite(2, HIGH); // Assuming built-in LED is active low
         wifiState = WIFI_CONNECTED;
     }
+    
     else
     {
         wifiState = WIFI_CONFIGURED_NOT_CONNECTED;
@@ -48,14 +49,34 @@ void sys_wifi_init()
 
     if (strlen(sys_eeprom_ssid) > 0 && strlen(sys_eeprom_password) > 0)
     {
+        // Đã có cấu hình WiFi, tiến hành kết nối
         connectToWiFi(sys_eeprom_ssid, sys_eeprom_password);
     }
     else
     {
-        Serial.println("No WiFi credentials found. Please configure WiFi.");
-        Serial.println("\n Restarting AP mode...");
+        // Không có cấu hình WiFi, bật chế độ AP để cài đặt
+        Serial.println("No WiFi credentials found. Starting AP mode for configuration.");
         WiFi.mode(WIFI_AP);
-        WiFi.softAP("TEWD43472L55");
+
+        // --- ĐÂY LÀ THAY ĐỔI QUAN TRỌNG ---
+        
+        // Kiểm tra xem deviceID trong EEPROM có rỗng không (ví dụ: lần chạy đầu tiên)
+        if (sys_eeprom_deviceID[0] == '\0') 
+        {
+            // Nếu rỗng, dùng một tên AP mặc định an toàn
+            WiFi.softAP("ESP32_CONFIG_AP"); 
+            Serial.println("Warning: deviceID not set in EEPROM. Using default AP name 'ESP32_CONFIG_AP'.");
+        } 
+        else 
+        {
+            // Nếu đã có deviceID, dùng nó làm tên Soft AP
+            WiFi.softAP(sys_eeprom_deviceID);
+            Serial.print("Soft AP name set from deviceID: ");
+            Serial.println(sys_eeprom_deviceID);
+        }
+        
+        // --- HẾT THAY ĐỔI ---
+
         Serial.print("AP IP address: ");
         Serial.println(WiFi.softAPIP());
     }

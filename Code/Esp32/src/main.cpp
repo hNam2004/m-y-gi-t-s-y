@@ -25,7 +25,7 @@ char mqtt_topic_control[150];
 #define BOOT_PIN 99
 #define RST_PIN 23
 #define LED_PIN 21
-#define COIN_PIN 15
+#define COIN_PIN 12
 #define IN_SIG2 19
 
 WiFiClient espClient;
@@ -626,11 +626,7 @@ void task3Function(void *parameter)
             }
 
 
-            if (millis() - task3_lastBlinkTime >= BLINK_INTERVAL)
-            {
-                digitalWrite(LED_PIN, !digitalRead(LED_PIN)); 
-                task3_lastBlinkTime = millis();
-            }
+
 
 
             if (press && (millis() - pressTime >= RESET_HOLD_TIME))
@@ -638,16 +634,10 @@ void task3Function(void *parameter)
                 Serial.println("[Task 3] >>> Nut RST giu 5s, xoa WiFi <<<");
                 clearWiFiCredentials(); 
                 press = false; 
+                digitalWrite(LED_PIN,HIGH);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                digitalWrite(LED_PIN,LOW);
 
-                while (digitalRead(RST_PIN) == LOW)
-                {
-                    if (millis() - task3_lastBlinkTime >= BLINK_INTERVAL)
-                    {
-                        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-                        task3_lastBlinkTime = millis();
-                    }
-                    vTaskDelay(pdMS_TO_TICKS(50));
-                }
             }
         }
         else 
@@ -719,7 +709,7 @@ void task5Function(void *parameter)
 
                     StaticJsonDocument<256> doc;
                     doc["s"] = (currentStatus == 1) ? 1 : 0;
-                    if (!digitalRead(IN_SIG2)){
+                    if (digitalRead(IN_SIG2)){
                         doc["s"] = 1;
                     }
                     if (infoReadSuccess)
@@ -729,14 +719,20 @@ void task5Function(void *parameter)
                         doc["v"] = v_buffer;
                         doc["st"] = 0; // Thêm dòng này
                     }
+
                     else
                     {
                         doc["v"] = "0,0,0,0";
                         doc["st"] = "02";
                     }
+                    if (machineType = 2){
+                        doc["st"] = "0";
+                    }
                     char jsonBuffer[256];
                     serializeJson(doc, jsonBuffer);
                     client.publish(mqtt_topic_info, jsonBuffer);
+                    digitalWrite(LED_PIN, LOW);
+                    digitalWrite(LED_PIN,HIGH);
                     Serial.print("Published info: ");
                     Serial.println(jsonBuffer);
                 }
@@ -767,6 +763,7 @@ void setup()
     sys_capserver_init();
     pinMode(BOOT_PIN, INPUT_PULLUP);
     pinMode(RST_PIN, INPUT_PULLUP);
+    pinMode(IN_SIG2, INPUT_PULLDOWN);
     pinMode(LED_PIN, OUTPUT);
     pinMode(COIN_PIN, OUTPUT);
     client.setServer(mqttServer, mqtt_port);
