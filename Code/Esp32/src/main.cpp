@@ -509,23 +509,32 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                 while (Serial.available())
                     Serial.read();
                 bool infoReadSuccess = readAndParseMachineData();
-                StaticJsonDocument<256> docs;
-                docs["s"] = (currentStatus == 1) ? 1 : 0;
-                if (infoReadSuccess)
-                {
-                    char v_buffer[100];
-                    sprintf(v_buffer, "%d,0,0,0", machineInfo.temperature);
-                    docs["v"] = v_buffer;
-                    docs["st"] = 0;
-                }
-                else
-                {
-                    docs["v"] = "0,0,0,0";
-                    docs["st"] = "02";
-                }
-                char jsonBuffer[256];
-                serializeJson(docs, jsonBuffer);
-                client.publish(mqtt_topic_info, jsonBuffer);
+                StaticJsonDocument<256> doc;
+                    doc["s"] = (currentStatus == 1) ? 1 : 0;
+                    if (digitalRead(IN_SIG2)){
+                        doc["s"] = 1;
+                    }
+                    if (infoReadSuccess)
+                    {
+                        char v_buffer[100];
+                        sprintf(v_buffer, "%d,0,%d,0", machineInfo.temperature,machineInfo.coinsInBox);
+                        doc["v"] = v_buffer;
+                        doc["st"] = 0; // Thêm dòng này
+                    }
+
+                    else
+                    {
+                        doc["v"] = "0,0,0,0";
+                        doc["st"] = "02";
+                    }
+                    if (machineType = 2){
+                        doc["st"] = "0";
+                    }
+                    char jsonBuffer[256];
+                    serializeJson(doc, jsonBuffer);
+                    client.publish(mqtt_topic_info, jsonBuffer);
+                    digitalWrite(LED_PIN, LOW);
+                    digitalWrite(LED_PIN,HIGH);
             }
             else if (strcmp(t_value, "i") == 0 && strcmp(v_value, "1") == 0)
             {
