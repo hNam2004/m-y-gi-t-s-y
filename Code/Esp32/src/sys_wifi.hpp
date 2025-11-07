@@ -7,7 +7,7 @@ enum WiFiState {
   WIFI_CONNECTED,
   WIFI_CONNECTING,
 };
-
+extern bool checkNetworkConnectivity();
 extern WiFiState wifiState;
 extern void saveWiFiCredentials(const char *newSSID, const char *newPassword);
 extern void clearWiFiCredentials();

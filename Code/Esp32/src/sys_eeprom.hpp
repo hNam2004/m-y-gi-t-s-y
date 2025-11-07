@@ -23,7 +23,7 @@ extern char sys_eeprom_machineType[MAX_MACHINE_TYPE_LENGTH];
 extern void readWiFiCredentialsFromEEPROM();
 extern void clearWiFiCredentialsInEEPROM();
 extern void saveWiFiCredentialsToEEPROM(const char *ssid, const char *password);
-
+extern bool checkNetworkConnectivity();
 extern void readConfigDataFromEEPROM();
 extern void saveConfigDataToEEPROM(const char *key, const char *value);
 

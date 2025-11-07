@@ -1,7 +1,9 @@
 #include <sys_wifi.hpp>
 #include <sys_eeprom.hpp>
 #include <WiFi.h>
-
+#include <string.h> 
+#include <ESP32Ping.h> // Thư viện này định nghĩa đối tượng toàn cục 'Ping'
+#include <Arduino.h>
 WiFiState wifiState = WIFI_NOT_CONFIGURED;
 
 void connectToWiFi(const char *ssid, const char *password)
@@ -42,7 +44,7 @@ void saveWiFiCredentials(const char *newSSID, const char *newPassword)
     // Save new WiFi credentials to EEPROM
     saveWiFiCredentialsToEEPROM(newSSID, newPassword);
 }
-
+    
 void sys_wifi_init()
 {
     readWiFiCredentialsFromEEPROM();
@@ -89,4 +91,23 @@ void clearWiFiCredentials()
     pinMode(2, OUTPUT);
     digitalWrite(2, LOW); // Assuming built-in LED is active low
     sys_wifi_init();
+}
+
+bool checkNetworkConnectivity()
+{
+    const char *testHost = "www.google.com";
+    const int pingCount = 2; 
+    // const int timeoutMs = 1000; // Tham số này không được hỗ trợ trong hàm ping(host, count)
+
+    Serial.printf("[WiFi Check] Pinging %s (%d times)...\n", testHost, pingCount);
+
+    // SỬA LỖI 1: Chỉ dùng 2 tham số (host, count), giống như trong main.cpp
+    if (Ping.ping(testHost, pingCount)) {
+        Serial.println("[WiFi Check] Ping SUCCESS. Network is UP and IP is resolved.");
+        return true;
+    } else {
+        // Ping thất bại (Không phân giải được DNS/mất kết nối Internet)
+        Serial.println("[WiFi Check] Ping FAILED. IP resolution or network access issue.");
+        return false; // SỬA LỖI 2: Thêm "return false;"
+    }
 }

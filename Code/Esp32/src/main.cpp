@@ -9,8 +9,8 @@
 #include <Wire.h>
 #include <ESP32Ping.h>
 #include <ArduinoJson.h>
-#include <EEPROM.h> // <-- ĐÃ THAY THẾ Preferences.h
-#include "sys_eeprom.hpp" // <-- THÊM VÀO ĐỂ DÙNG CHUNG
+#include <EEPROM.h> 
+#include "sys_eeprom.hpp" 
 
 char deviceID[32];
 char mqttServer[100];
@@ -477,22 +477,14 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                     char jsonMsg[50];
                     sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
                     client.publish(mqtt_topic_cmd, jsonMsg);
-
-                    if (strcmp(v_value, "1") == 0)
+                    int count = atoi(v_value);                   
+                    for (int i=0;i<count;i++)
                     {
-                        digitalWrite(COIN_PIN, LOW); 
+                        digitalWrite(COIN_PIN,HIGH);
+                        vTaskDelay(100);
+                        digitalWrite(COIN_PIN,LOW);
+                        vTaskDelay(100);
                     }
-                    else if (strcmp(v_value, "3") == 0) 
-                    {
-                        digitalWrite(COIN_PIN, HIGH);
-                        vTaskDelay(pdMS_TO_TICKS(100)); 
-                        digitalWrite(COIN_PIN, LOW);
-                    }
-                    else if (strcmp(v_value, "2") == 0)
-                    {
-                        digitalWrite(COIN_PIN, HIGH); 
-                    }
-
                     digitalWrite(LED_PIN, LOW);
                     vTaskDelay(pdMS_TO_TICKS(100));
                     digitalWrite(LED_PIN, HIGH);
@@ -577,7 +569,7 @@ void task2Function(void *parameter)
 {
     pinMode(LED_PIN, OUTPUT);
     long lastPingTime = 0;
-    const int pingInterval = 30000;
+    const int pingInterval = 90000;
 
     while (true)
     {
@@ -741,6 +733,7 @@ void task5Function(void *parameter)
                     serializeJson(doc, jsonBuffer);
                     client.publish(mqtt_topic_info, jsonBuffer);
                     digitalWrite(LED_PIN, LOW);
+                    vTaskDelay(pdMS_TO_TICKS(100));
                     digitalWrite(LED_PIN,HIGH);
                     Serial.print("Published info: ");
                     Serial.println(jsonBuffer);
