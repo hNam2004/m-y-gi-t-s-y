@@ -45,10 +45,16 @@ volatile uint8_t Interupt_Flag = 0;
 volatile bool connectWifiPing = false;
 
 int machineType = 1; 
-// --- THÊM DÒNG NÀY ĐỂ DỪNG MODBUS KHI ĐANG OTA ---
+
+// --- CỜ QUAN TRỌNG ĐỂ DỪNG MODBUS KHI ĐANG OTA ---
 volatile bool g_otaInProgress = false;
 
-byte requestReadInfo[] = {0x01, 0x03, 0x03, 0x20, 0x00, 0x46, 0xC5, 0xB6};
+// --- BIẾN TOÀN CỤC MỚI CHO TASK OTA ---
+TaskHandle_t task6_handle = NULL; // Handle cho Task 6 (OTA)
+char g_otaUrl[256];             // Biến toàn cục để truyền URL cho Task 6
+
+
+byte requestReadInfo[] = {0x01, 0x03, 0x03, 0x20, 0x00, 0x04, 0xC5, 0xB6};
 byte requestReadStatus[] = {0x01, 0x01, 0x00, 0x00, 0x00, 0xA0, 0x3C, 0x72};
 
 const int RESPONSE_BUFFER_SIZE = 145;
@@ -322,10 +328,8 @@ void buildMqttTopics()
     Serial.println("-------------------------------");
 }
 
-// *** HÀM ĐÃ SỬA: Dùng sys_eeprom.hpp ***
 void saveAndRestart(const char* key, String value)
 {
-    // Gọi hàm lưu EEPROM mới
     saveConfigDataToEEPROM(key, value.c_str());
 
     Serial.printf("Đã lưu %s = %s vào EEPROM\n", key, value.c_str());
@@ -334,18 +338,14 @@ void saveAndRestart(const char* key, String value)
     ESP.restart();
 }
 
-// *** HÀM ĐÃ SỬA: Dùng sys_eeprom.hpp ***
 void loadConfig()
 {
-    // Đọc dữ liệu từ EEPROM vào các biến global (sys_eeprom_...)
     readConfigDataFromEEPROM(); 
     
-    // Chuyển từ global var sang String để xử lý logic mặc định
     String id = String(sys_eeprom_deviceID);
     String server = String(sys_eeprom_mqttServer);
     String typeStr = String(sys_eeprom_machineType);
     
-    // Logic gán giá trị mặc định nếu EEPROM trống
     if (id.length() == 0) {
         id = "1234";
     }
@@ -362,7 +362,6 @@ void loadConfig()
         machineType = 1; 
     }
     
-    // Sao chép vào các biến char array toàn cục
     strcpy(deviceID, id.c_str());
     strcpy(mqttServer, server.c_str());
 
@@ -375,7 +374,7 @@ void loadConfig()
     buildMqttTopics();
 }
 
-// --- HÀM HELPER ĐỂ GỬI TRẠNG THÁI OTA (ĐÃ THÊM) ---
+// --- HÀM HELPER ĐỂ GỬI TRẠNG THÁI OTA ---
 // Dùng để phản hồi lại lệnh "f_update"
 int MQTT_Publish_Status(const char* _t, const char* _s) {
     StaticJsonDocument<128> doc;
@@ -385,8 +384,8 @@ int MQTT_Publish_Status(const char* _t, const char* _s) {
     char strPub[128];
     size_t len = serializeJson(doc, strPub, sizeof(strPub));
     
-    // Gửi phản hồi về topic "cmd" để máy chủ biết
     if (client.connected()) {
+        // Gửi phản hồi về topic "cmd" để máy chủ biết
         client.publish(mqtt_topic_cmd, strPub, len); 
         return 1;
     } else {
@@ -395,7 +394,7 @@ int MQTT_Publish_Status(const char* _t, const char* _s) {
 }
 
 
-// --- CÁC HÀM OTA (ĐÃ THÊM) ---
+// --- CÁC HÀM OTA (GIỮ NGUYÊN) ---
 
 void printPercent(uint32_t readLength, uint32_t contentLength) {
     if (contentLength != 0) {
@@ -407,7 +406,6 @@ void printPercent(uint32_t readLength, uint32_t contentLength) {
     }
 }
 
-// --- HÀM DOWNLOADFIRMWARE ĐƯỢC VIẾT LẠI (DÙNG HTTPClient) ---
 int downloadFirmWare(String server, String resource)
 {
     const char* firmware_filename = "/firmware.bin"; 
@@ -417,43 +415,32 @@ int downloadFirmWare(String server, String resource)
         Serial.println("[OTA] Đã xóa tệp firmware cũ.");
     }
 
-    // Tạo một đối tượng HTTP client
     HTTPClient http;
-    
-    // Tạo một đối tượng WiFiClientSecure *riêng* cho HTTPClient này
     WiFiClientSecure client_for_http;
-    
-    // --- YÊU CẦU: TIN TƯỞNG TẤT CẢ CÁC LINK ---
     client_for_http.setInsecure();
 
     String full_url = "https://" + server + "/" + resource;
     Serial.print(F("[OTA] Đang kết nối (HTTPClient) đến: "));
     Serial.println(full_url);
 
-    // Bắt đầu HTTPClient với client (insecure) và URL
     if (!http.begin(client_for_http, full_url)) {
         Serial.println("[OTA] Lỗi: Không thể khởi tạo HTTPClient.");
         return 0;
     }
 
-    // Thêm User-Agent (rất quan trọng với GitHub)
     http.addHeader("User-Agent", "ESP32-OTA-Downloader");
-
-    http.setTimeout(20000); // 20 giây timeout
-
+    http.setTimeout(20000); 
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     
-    // Thực hiện lệnh GET (đã bao gồm tự động theo dõi chuyển hướng)
     int httpCode = http.GET();
 
-    if (httpCode != HTTP_CODE_OK) { // HTTP_CODE_OK là 200
+    if (httpCode != HTTP_CODE_OK) { 
         Serial.printf("[OTA] Lỗi: HTTP GET thất bại, mã lỗi: %d\n", httpCode);
         Serial.println(http.errorToString(httpCode).c_str());
         http.end();
         return 0;
     }
 
-    // Nếu thành công (HTTP 200 OK)
     int contentLength = http.getSize();
     if (contentLength <= 0) {
         Serial.println(F("[OTA] Lỗi: Content-Length bằng 0 hoặc không xác định (mặc dù HTTP 200 OK)."));
@@ -471,7 +458,6 @@ int downloadFirmWare(String server, String resource)
         return 0;
     }
 
-    // Lấy con trỏ (pointer) đến stream dữ liệu
     WiFiClient* stream = http.getStreamPtr();
 
     uint32_t readLength = 0;
@@ -481,7 +467,7 @@ int downloadFirmWare(String server, String resource)
 
     printPercent(readLength, contentLength);
 
-    while (http.connected() && (readLength < contentLength || contentLength == -1) && millis() - timeout < 20000L) // Tăng timeout lên 20s
+    while (http.connected() && (readLength < contentLength || contentLength == -1) && millis() - timeout < 20000L)
     {
         if (stream->available()) 
         {
@@ -490,7 +476,6 @@ int downloadFirmWare(String server, String resource)
             crc.update(c);
             readLength++;
 
-            // Cập nhật % mỗi 100ms để tránh spam Serial
             if (millis() - lastUpdate > 100) {
                 printPercent(readLength, contentLength);
                 lastUpdate = millis();
@@ -498,13 +483,13 @@ int downloadFirmWare(String server, String resource)
             timeout = millis();
         }
         else {
-             vTaskDelay(pdMS_TO_TICKS(1)); // Chờ dữ liệu
+             vTaskDelay(pdMS_TO_TICKS(1)); 
         }
     }
 
     file.close();
-    http.end(); // Quan trọng: giải phóng tài nguyên
-    printPercent(readLength, contentLength); // In lần cuối
+    http.end(); 
+    printPercent(readLength, contentLength); 
     Serial.println(); 
 
     Serial.print("[OTA] Content-Length: ");   Serial.println(contentLength);
@@ -549,7 +534,7 @@ int updateFirmWare() {
     if (Update.end()) {
         Serial.println("[OTA] Cập nhật thành công!");
         file.close();
-        SPIFFS.remove(firmware_filename); // Xóa file sau khi update
+        SPIFFS.remove(firmware_filename); 
         return 1;
     } else {
         Serial.println("Lỗi Occurred: " + String(Update.getError()));
@@ -630,7 +615,8 @@ void checkSerialCommands()
         }
     }
 }
-// --- HÀM MQTT CALLBACK ĐÃ SỬA (Bảo vệ chống xung đột) ---
+
+// --- HÀM MQTT CALLBACK ĐÃ SỬA (CHỈ KÍCH HOẠT TASK 6) ---
 void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
     char message[length + 1];
@@ -640,7 +626,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
 
     if (strcmp(topic, mqtt_topic_control) == 0)
     {
-        JsonDocument doc; // Sửa cảnh báo v7
+        JsonDocument doc; 
         DeserializationError error = deserializeJson(doc, payload, length);
         if (error)
         {
@@ -653,15 +639,13 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         
         if (t_value && v_value)
         {
-            // --- LOGIC MỚI: BẢO VỆ CHỐNG XUNG ĐỘT ---
-            // Nếu đang OTA, TỪ CHỐI tất cả các lệnh khác (đặc biệt là các lệnh Modbus)
+            // Nếu đang OTA (g_otaInProgress = true), TỪ CHỐI tất cả các lệnh khác
             if (g_otaInProgress && strcmp(t_value, "f_update") != 0) {
                 Serial.println("[OTA] Đang bận cập nhật, từ chối lệnh xen ngang!");
-                // Gửi lại 1 tin nhắn "busy" (bận)
                 MQTT_Publish_Status(t_value, "busy_ota");
                 return; // Thoát ngay, KHÔNG chạy bất kỳ lệnh Modbus nào
             }
-            // --- HẾT LOGIC MỚI ---
+            // --- HẾT LOGIC BẢO VỆ ---
 
             if (strcmp(t_value, "c") == 0 || strcmp(t_value, "p") == 0)
             {
@@ -682,7 +666,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                     char jsonMsg[50];
                     sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
                     client.publish(mqtt_topic_cmd, jsonMsg);
-                    int count = atoi(v_value);             
+                    int count = atoi(v_value);         
                     for (int i=0;i<count;i++)
                     {
                         digitalWrite(COIN_PIN,HIGH);
@@ -701,16 +685,15 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                 sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"%s\"}", t_value, v_value);
                 client.publish(mqtt_topic_cmd, jsonMsg); 
                 
-                // Xóa bộ đệm Serial (Modbus) trước khi gọi
                 while (Serial.available()) Serial.read();
                 int currentStatus = getMachineStatus();
                 
-                vTaskDelay(pdMS_TO_TICKS(200)); // Chờ máy trả lời
+                vTaskDelay(pdMS_TO_TICKS(200)); 
                 
                 while (Serial.available()) Serial.read();
                 bool infoReadSuccess = readAndParseMachineData();
 
-                JsonDocument doc_s; // Sửa cảnh báo v7
+                JsonDocument doc_s; 
                 doc_s["s"] = (currentStatus == 1) ? 1 : 0;
                 if (digitalRead(IN_SIG2)){
                     doc_s["s"] = 1;
@@ -721,6 +704,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                     sprintf(v_buffer, "%d,0,%d,0", machineInfo.temperature,machineInfo.coinsInBox);
                     doc_s["v"] = v_buffer;
                     doc_s["st"] = 0; 
+                
                 }
                 else
                 {
@@ -728,7 +712,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                     doc_s["st"] = "02";
                 }
                 
-                if (machineType == 2){ // Sửa lỗi gõ sai
+                if (machineType == 2){ 
                     doc_s["st"] = "0";
                 }
                 char jsonBuffer[256];
@@ -746,65 +730,42 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                 client.publish(mqtt_topic_info, FIRMWARE_VERSION);
             }
 
-            // --- LOGIC OTA (Bật/Tắt Cờ) ---
+            // --- LOGIC OTA (ĐÃ SỬA: CHỈ KÍCH HOẠT TASK 6) ---
             else if (strcmp(t_value, "f_update") == 0)
             {
-                // BƯỚC 1: GỬI PHẢN HỒI "STARTING"
-                Serial.println("[OTA] Nhận lệnh cập nhật. Gửi 'starting'...");
-                char jsonMsg[50];
-                sprintf(jsonMsg, "{\"t\":\"%s\", \"v\":\"starting\"}", t_value);
-                client.publish(mqtt_topic_cmd, jsonMsg);
-                vTaskDelay(pdMS_TO_TICKS(100));
-
-                // BƯỚC 2: BÁO CHO TASK 5 DỪNG MODBUS
-                Serial.println("[OTA] Tạm dừng Modbus (Task 5)...");
-                g_otaInProgress = true; // <-- BẬT CỜ
-
-                // BƯỚC 3: TIẾN HÀNH OTA
-                String cmd_firmware = String(v_value); 
-                String _Data[2]; 
-
-                int firstSlash = cmd_firmware.indexOf('/');
-                if (firstSlash == -1 || firstSlash == 0) {
-                    Serial.println("[OTA] Lỗi: Định dạng 'v' sai. Cần: server/resource");
-                    MQTT_Publish_Status("f_update", "format error"); 
-                    g_otaInProgress = false; // <-- TẮT CỜ (ROLLBACK)
-                    return; 
-                }
-
-                _Data[0] = cmd_firmware.substring(0, firstSlash);
-                _Data[1] = cmd_firmware.substring(firstSlash + 1);
-
-                Serial.println("  Server: " + _Data[0]);
-                Serial.println("  Resource: " + _Data[1]);
-                
-                int ret;
-                ret = downloadFirmWare(_Data[0], _Data[1]);
-                
-                if (ret == 0) 
+                // --- LOGIC MỚI: KIỂM TRA & KÍCH HOẠT ---
+                if (g_otaInProgress) 
                 {
-                    Serial.println("[OTA] Tải firmware thất bại.");
-                    MQTT_Publish_Status("f_update", "download error");
-                    g_otaInProgress = false; // <-- TẮT CỜ (ROLLBACK)
-                    return; 
+                    // Nếu cờ đã bật, nghĩa là Task 6 đang chạy, từ chối lệnh mới
+                    Serial.println("[OTA] Đang bận cập nhật (Task 6 đang chạy), từ chối lệnh!");
+                    MQTT_Publish_Status("f_update", "busy_ota");
                 }
-                
-                ret = updateFirmWare();
-                
-                if (ret == 1) 
+                else
                 {
-                    Serial.println("[OTA] Cập nhật thành công. Khởi động lại...");
-                    MQTT_Publish_Status("f_update", "update success"); 
-                    vTaskDelay(pdMS_TO_TICKS(1000));
-                    ESP.restart(); // <-- THÀNH CÔNG, KHỞI ĐỘNG LẠI
+                    // Nếu rảnh, bắt đầu 1 phiên OTA mới
+                    Serial.println("[OTA] Nhận lệnh cập nhật. Kích hoạt Task 6...");
+
+                    // BƯỚC 1: BẬT CỜ NGAY LẬP TỨC
+                    // (Task 5 sẽ thấy cờ này và dừng Modbus)
+                    g_otaInProgress = true; 
+
+                    // BƯỚC 2: SAO CHÉP URL
+                    // (Task 6 sẽ đọc biến g_otaUrl này)
+                    strncpy(g_otaUrl, v_value, sizeof(g_otaUrl) - 1);
+                    g_otaUrl[sizeof(g_otaUrl) - 1] = '\0'; // Đảm bảo null-terminated
+
+                    // BƯỚC 3: GỬI PHẢN HỒI "STARTING"
+                    MQTT_Publish_Status("f_update", "starting");
+                    
+                    // BƯỚC 4: ĐÁNH THỨC TASK 6
+                    if (task6_handle != NULL) {
+                        vTaskResume(task6_handle);
+                    } else {
+                        Serial.println("[OTA] LỖI NGHIÊM TRỌNG: task6_handle is NULL!");
+                        g_otaInProgress = false; // Rollback
+                    }
                 }
-                else 
-                {
-                    Serial.println("[OTA] Cài đặt firmware thất bại.");
-                    MQTT_Publish_Status("f_update", "update error"); 
-                    g_otaInProgress = false; // <-- TẮT CỜ (ROLLBACK)
-                    return; 
-                }
+                // BƯỚC 5: THOÁT CALLBACK NGAY LẬP TỨC
             }
             else
             {
@@ -898,10 +859,6 @@ void task3Function(void *parameter)
                 Serial.println("[Task 3] Bắt đầu giữ nút RST (timer 5s)...");
             }
 
-
-
-
-
             if (press && (millis() - pressTime >= RESET_HOLD_TIME))
             {
                 Serial.println("[Task 3] >>> Nut RST giu 5s, xoa WiFi <<<");
@@ -910,7 +867,6 @@ void task3Function(void *parameter)
                 digitalWrite(LED_PIN,HIGH);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 digitalWrite(LED_PIN,LOW);
-
             }
         }
         else 
@@ -928,7 +884,8 @@ void task3Function(void *parameter)
 }
 
 
-// --- HÀM ĐÃ SỬA: Thêm cờ g_otaInProgress ---
+// --- TASK 5 (MODBUS & MQTT) - GIỮ NGUYÊN ---
+// Logic `if (!g_otaInProgress)` đã có sẵn và sẽ hoạt động
 void task5Function(void *parameter)
 {
     long lastMsgTime = 0;
@@ -968,27 +925,26 @@ void task5Function(void *parameter)
             }
             else 
             {
-                client.loop(); // Luôn chạy client.loop() (để OTA hoạt động)
+                client.loop(); // Luôn chạy client.loop()
                 
-                // --- LOGIC MỚI: BẢO VỆ "BẢN TIN 3S" ---
                 if (millis() - lastMsgTime > publishInterval)
                 {
-                    // --- ĐÂY LÀ DÒNG KIỂM TRA QUAN TRỌNG NHẤT ---
-                    if (!g_otaInProgress) // <-- KIỂM TRA CỜ OTA
+                    // --- KIỂM TRA CỜ OTA TRƯỚC KHI CHẠY MODBUS ---
+                    if (!g_otaInProgress) 
                     {
                         lastMsgTime = millis();
 
-                        while (Serial.available()) // Vẫn dùng Serial (theo ý bạn)
+                        while (Serial.available())
                             Serial.read();
 
                         int currentStatus = getMachineStatus();
 
-                        while (Serial.available()) // Vẫn dùng Serial (theo ý bạn)
+                        while (Serial.available())
                             Serial.read();
 
                         bool infoReadSuccess = readAndParseMachineData();
 
-                        JsonDocument doc_pub; // Sửa cảnh báo v7
+                        JsonDocument doc_pub; 
                         doc_pub["s"] = (currentStatus == 1) ? 1 : 0;
                         if (digitalRead(IN_SIG2)){
                             doc_pub["s"] = 1;
@@ -1006,7 +962,6 @@ void task5Function(void *parameter)
                             doc_pub["st"] = "02";
                         }
                         
-                        // --- SỬA LỖI GÕ SAI (từ = thành ==) ---
                         if (machineType == 2){ 
                             doc_pub["st"] = "0";
                         }
@@ -1026,7 +981,6 @@ void task5Function(void *parameter)
                         lastMsgTime = millis(); // Reset timer
                     }
                 }
-                // --- HẾT LOGIC MỚI ---
             }
         }
         else if (wifiState == WIFI_CONFIGURED_NOT_CONNECTED)
@@ -1042,22 +996,89 @@ void task5Function(void *parameter)
     }
 }
 
+
+// --- HÀM MỚI: TASK DÀNH RIÊNG CHO OTA ---
+void task6Function(void *parameter)
+{
+    Serial.println("[Task 6] Khởi tạo. Sẵn sàng nhận lệnh OTA.");
+
+    while (true)
+    {
+        // 1. Chờ (Treo) ở đây cho đến khi mqttCallback đánh thức (vTaskResume)
+        // Khi task treo, nó không tốn CPU
+        vTaskSuspend(NULL);
+
+        // 2. ĐÃ ĐƯỢC ĐÁNH THỨC. Bắt đầu OTA.
+        // (Lúc này, g_otaInProgress đã được set = true bởi callback)
+        Serial.println("[Task 6] Đã được kích hoạt. Bắt đầu quá trình OTA...");
+        
+        String cmd_firmware = String(g_otaUrl); // Đọc URL từ biến toàn cục
+        String _Data[2]; 
+
+        int firstSlash = cmd_firmware.indexOf('/');
+        if (firstSlash == -1 || firstSlash == 0) {
+            Serial.println("[Task 6] Lỗi: Định dạng 'v' sai. Cần: server/resource");
+            MQTT_Publish_Status("f_update", "format error"); 
+            g_otaInProgress = false; // <-- TẮT CỜ (ROLLBACK)
+            continue; // Quay lại vTaskSuspend (chờ lệnh tiếp theo)
+        }
+
+        _Data[0] = cmd_firmware.substring(0, firstSlash);
+        _Data[1] = cmd_firmware.substring(firstSlash + 1);
+
+        Serial.println("   [Task 6] Server: " + _Data[0]);
+        Serial.println("   [Task 6] Resource: " + _Data[1]);
+        
+        int ret;
+        
+        // BƯỚC 3: DOWNLOAD
+        ret = downloadFirmWare(_Data[0], _Data[1]);
+        
+        if (ret == 0) 
+        {
+            Serial.println("[Task 6] Tải firmware thất bại.");
+            MQTT_Publish_Status("f_update", "download error");
+            g_otaInProgress = false; // <-- TẮT CỜ (ROLLBACK)
+            continue; // Quay lại vTaskSuspend
+        }
+        
+        // BƯỚC 4: UPDATE
+        ret = updateFirmWare();
+        
+        if (ret == 1) 
+        {
+            Serial.println("[Task 6] Cập nhật thành công. Khởi động lại...");
+            MQTT_Publish_Status("f_update", "update success"); 
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            ESP.restart(); // <-- THÀNH CÔNG, KHỞI ĐỘNG LẠI
+            // Sẽ không bao giờ quay lại
+        }
+        else 
+        {
+            Serial.println("[Task 6] Cài đặt firmware thất bại.");
+            MQTT_Publish_Status("f_update", "update error"); 
+            g_otaInProgress = false; // <-- TẮT CỜ (ROLLBACK)
+            continue; // Quay lại vTaskSuspend
+        }
+    }
+}
+
+
 void setup()
 {
     Serial.begin(9600, SERIAL_8N1);
     delay(1000);
 
-    // --- KHỞI TẠO SPIFFS CHO OTA ---
     if(!SPIFFS.begin(true)){
         Serial.println("An Error has occurred while mounting SPIFFS");
-        return; // Treo ở đây nếu SPIFFS lỗi
+        return; 
     }
     Serial.println("SPIFFS mounted successfully");
     
     EEPROM.begin(512); 
     
-    loadConfig(); // Bây giờ sẽ đọc từ EEPROM
-    sys_wifi_init(); // Sẽ đọc WiFi từ EEPROM
+    loadConfig(); 
+    sys_wifi_init(); 
     sys_capserver_init();
     pinMode(BOOT_PIN, INPUT_PULLUP);
     pinMode(RST_PIN, INPUT_PULLUP);
@@ -1071,8 +1092,17 @@ void setup()
     xTaskCreate(task2Function, "Task 2", 10000, NULL, 1, NULL); 
     xTaskCreate(task3Function, "Task 3", 3000, NULL, 1, NULL); 
     xTaskCreate(task5Function, "Task 5", 10000, NULL, 1, NULL); 
+
+    // --- THÊM TASK 6 (OTA) ---
+    // Cần stack lớn (8192) và ưu tiên cao hơn (2)
+    xTaskCreate(task6Function, "Task 6 OTA", 8192, NULL, 2, &task6_handle); 
+
+    if (task6_handle == NULL) {
+        Serial.println("LỖI: Không thể tạo Task 6!");
+    }
 }
 
 void loop()
 {
+    // Để trống, vì FreeRTOS đã xử lý mọi thứ
 }
