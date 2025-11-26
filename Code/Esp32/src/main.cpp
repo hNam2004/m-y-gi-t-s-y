@@ -880,43 +880,25 @@ void task3Function(void *parameter)
 }
 
 
-// ... (Các biến timeout hard reset giữ nguyên) ...
-const unsigned long HARD_RESET_TIMEOUT = 5 * 60 * 1000; 
-
 void task5Function(void *parameter)
 {
     long lastMsgTime = 0;
     const int publishInterval = 3000;
     long lastMqttAttempt = 0;
-    
-    unsigned long disconnectStartTime = 0; 
-    bool isDisconnected = false;
-    long lastSoftReconnectAttempt = 0;
-    const int softReconnectInterval = 20000;
+    long lastWifiReconnectAttempt = 0;
+    const int wifiReconnectInterval = 15000;
 
     while (true)
     {
-        checkSerialCommands();
-
-        // --- [FIX] NẾU ĐANG OTA THÌ NHƯỜNG MẠNG CHO TASK 6 ---
-        if (g_otaInProgress) 
+        checkSerialCommands(); 
+        
+        if (WiFi.status() == WL_CONNECTED)
         {
-            // Không gọi client.loop(), không reconnect, chỉ đợi
-            // Để Task 6 toàn quyền sử dụng 'client' để publish status
-            vTaskDelay(pdMS_TO_TICKS(100)); 
-            continue; // Bỏ qua vòng lặp hiện tại
-        }
-        // -----------------------------------------------------
-
-        bool hardwareConnected = (WiFi.status() == WL_CONNECTED);
-        bool logicConnected = (wifiState == WIFI_CONNECTED);
-        bool systemOnline = hardwareConnected && logicConnected;
-
-        if (systemOnline)
-        {
-            isDisconnected = false;
-            disconnectStartTime = 0;
-
+            if (wifiState != WIFI_CONNECTED)
+            {
+                wifiState = WIFI_CONNECTED;
+            }
+            
             if (!client.connected())
             {
                 if (millis() - lastMqttAttempt > 5000)
@@ -926,7 +908,7 @@ void task5Function(void *parameter)
                     {
                         Serial.println("MQTT connected");
                         client.subscribe(mqtt_topic_control);
-                        client.subscribe(mqtt_topic_info);
+                        client.subscribe(mqtt_topic_info); 
                     }
                     else
                     {
@@ -935,78 +917,71 @@ void task5Function(void *parameter)
                     lastMqttAttempt = millis();
                 }
             }
-            else
+            else 
             {
-                client.loop(); // Task 5 chỉ được loop khi KHÔNG OTA
+                client.loop(); 
                 
                 if (millis() - lastMsgTime > publishInterval)
                 {
-                    // Đã check g_otaInProgress ở đầu hàm rồi, nên ở đây cứ chạy Modbus thôi
-                    lastMsgTime = millis();
+                    if (!g_otaInProgress) 
+                    {
+                        lastMsgTime = millis();
 
-                    while (Serial.available()) Serial.read();
-                    int currentStatus = getMachineStatus();
-                    while (Serial.available()) Serial.read();
-                    bool infoReadSuccess = readAndParseMachineData();
+                        while (Serial.available())
+                            Serial.read();
 
-                    JsonDocument doc_pub; 
-                    doc_pub["s"] = (currentStatus == 1) ? 1 : 0;
-                    if (digitalRead(IN_SIG2)) doc_pub["s"] = 1;
-                    
-                    if (infoReadSuccess) {
-                        char v_buffer[100];
-                        sprintf(v_buffer, "%d,0,%d,0", machineInfo.temperature,machineInfo.coinsInBox);
-                        doc_pub["v"] = v_buffer;
-                        doc_pub["st"] = 0; 
-                    } else {
-                        doc_pub["v"] = "0,0,0,0";
-                        doc_pub["st"] = "02";
+                        int currentStatus = getMachineStatus();
+
+                        while (Serial.available())
+                            Serial.read();
+
+                        bool infoReadSuccess = readAndParseMachineData();
+
+                        JsonDocument doc_pub; 
+                        doc_pub["s"] = (currentStatus == 1) ? 1 : 0;
+                        if (digitalRead(IN_SIG2)){
+                            doc_pub["s"] = 1;
+                        }
+                        if (infoReadSuccess)
+                        {
+                            char v_buffer[100];
+                            sprintf(v_buffer, "%d,0,%d,0", machineInfo.temperature,machineInfo.coinsInBox);
+                            doc_pub["v"] = v_buffer;
+                            doc_pub["st"] = 0; 
+                        }
+                        else
+                        {
+                            doc_pub["v"] = "0,0,0,0";
+                            doc_pub["st"] = "02";
+                        }
+                        
+                        if (machineType == 2){ 
+                            doc_pub["st"] = "0";
+                        }
+                        char jsonBuffer[256];
+                        serializeJson(doc_pub, jsonBuffer);
+                        client.publish(mqtt_topic_info, jsonBuffer);
+                        digitalWrite(LED_PIN, LOW);
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                        digitalWrite(LED_PIN,HIGH);
+                        
+                        Serial.print("Published info: ");
+                        Serial.println(jsonBuffer);
                     }
-                    if (machineType == 2) doc_pub["st"] = "0";
-
-                    char jsonBuffer[256];
-                    serializeJson(doc_pub, jsonBuffer);
-                    client.publish(mqtt_topic_info, jsonBuffer);
-                    
-                    digitalWrite(LED_PIN, LOW);
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                    digitalWrite(LED_PIN,HIGH);
+                    else {
+                        Serial.println("[Task 5] Đang OTA, tạm dừng Modbus...");
+                        lastMsgTime = millis(); 
+                    }
                 }
             }
         }
-        else 
+        else if (wifiState == WIFI_CONFIGURED_NOT_CONNECTED)
         {
-            // --- LOGIC MẤT MẠNG (HARD RESET) ---
-            if (!isDisconnected)
+            if (millis() - lastWifiReconnectAttempt > wifiReconnectInterval)
             {
-                Serial.println("[Task 5] Phát hiện mất kết nối! Bắt đầu đếm giờ...");
-                disconnectStartTime = millis();
-                isDisconnected = true;
-            }
-
-            unsigned long lostDuration = millis() - disconnectStartTime;
-
-            if (lostDuration > HARD_RESET_TIMEOUT)
-            {
-                Serial.println("[Task 5] !!! HARD RESET MẠNG (QUÁ 5 PHÚT) !!!");
-                WiFi.disconnect(true);
-                WiFi.mode(WIFI_OFF);
-                vTaskDelay(pdMS_TO_TICKS(500)); 
-                WiFi.mode(WIFI_STA);
-                sys_wifi_init();
-                WiFi.setSleep(false);
-                disconnectStartTime = millis();
-                wifiState = WIFI_NOT_CONFIGURED;
-            }
-            else
-            {
-                if (millis() - lastSoftReconnectAttempt > softReconnectInterval)
-                {
-                    Serial.printf("[Task 5] Reconnect nhẹ (%lu s)...\n", lostDuration/1000);
-                    if (WiFi.status() != WL_CONNECTED) WiFi.reconnect();
-                    else wifiState = WIFI_NOT_CONFIGURED;
-                    lastSoftReconnectAttempt = millis();
-                }
+                Serial.println("[Task 5] WiFi lost. Attempting to reconnect...");
+                WiFi.reconnect();
+                lastWifiReconnectAttempt = millis();
             }
         }
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -1021,103 +996,68 @@ void task6Function(void *parameter)
 
     while (true)
     {
-        // Chờ lệnh từ Task 5 (khi nhận được message f_update)
         vTaskSuspend(NULL);
 
-        // --- BẮT ĐẦU QUÁ TRÌNH OTA ---
+        // --- BẮT ĐẦU OTA ---
         Serial.println("[Task 6] Đã được kích hoạt. Bắt đầu quá trình OTA...");
-
-        // Kiểm tra kết nối MQTT trước khi gửi thông báo bắt đầu
-        if (!client.connected()) {
-            if (client.connect(deviceID)) Serial.println("[Task 6] Đã nối lại MQTT.");
-        }
+        
+        // [NEW] Gửi thông báo: Đang bắt đầu
         client.publish(mqtt_topic_ota_status, "starting");
-
-        // Xử lý URL
-        String cmd_firmware = String(g_otaUrl);
-        String _Data[2];
+        
+        String cmd_firmware = String(g_otaUrl); 
+        String _Data[2]; 
 
         int firstSlash = cmd_firmware.indexOf('/');
         if (firstSlash == -1 || firstSlash == 0) {
-            Serial.println("[Task 6] Lỗi: Định dạng URL sai.");
-            if (client.connected()) client.publish(mqtt_topic_ota_status, "failed_format");
-            g_otaInProgress = false; // Trả lại quyền cho Task 5
-            continue;
+            Serial.println("[Task 6] Lỗi: Định dạng 'v' sai.");
+            // [NEW] Gửi thông báo: Lỗi định dạng
+            client.publish(mqtt_topic_ota_status, "failed_format");
+            g_otaInProgress = false; 
+            continue; 
         }
 
-        _Data[0] = cmd_firmware.substring(0, firstSlash); // Server
-        _Data[1] = cmd_firmware.substring(firstSlash + 1); // Resource
+        _Data[0] = cmd_firmware.substring(0, firstSlash);
+        _Data[1] = cmd_firmware.substring(firstSlash + 1);
 
         Serial.println("   [Task 6] Server: " + _Data[0]);
         Serial.println("   [Task 6] Resource: " + _Data[1]);
-
+        
         int ret;
-
-        // --- BƯỚC 1: DOWNLOAD FIRMWARE ---
-        // Quá trình này tốn nhiều thời gian, MQTT có thể bị ngắt kết nối ở đây
+        
+        // BƯỚC 3: DOWNLOAD
         ret = downloadFirmWare(_Data[0], _Data[1]);
-
-        if (ret == 0)
+        
+        if (ret == 0) 
         {
             Serial.println("[Task 6] Tải firmware thất bại.");
-            
-            // [FIX] Kết nối lại MQTT nếu bị rớt để báo lỗi
-            if (!client.connected()) {
-                Serial.println("[Task 6] Mất kết nối MQTT. Đang nối lại để báo lỗi...");
-                client.connect(deviceID);
-            }
-            
+            // [NEW] Gửi thông báo: Lỗi tải về
             client.publish(mqtt_topic_ota_status, "failed_download");
-            g_otaInProgress = false; // Trả lại quyền cho Task 5
-            continue;
+            g_otaInProgress = false; 
+            continue; 
         }
-
-        // --- BƯỚC 2: UPDATE FIRMWARE ---
+        
+        // BƯỚC 4: UPDATE
         ret = updateFirmWare();
-
-        if (ret == 1)
+        
+        if (ret == 1) 
         {
-            Serial.println("[Task 6] Cập nhật thành công.");
-
-            // [FIX QUAN TRỌNG] Kiểm tra kết nối trước khi gửi Success
-            if (!client.connected()) {
-                Serial.println("[Task 6] MQTT đã mất kết nối. Đang nối lại...");
-                if (client.connect(deviceID)) {
-                    Serial.println("[Task 6] Đã nối lại MQTT thành công.");
-                } else {
-                    Serial.println("[Task 6] Lỗi: Không thể nối lại MQTT.");
-                }
-            }
-
-            // Gửi thông báo thành công
+            Serial.println("[Task 6] Cập nhật thành công. Khởi động lại...");
+            // [NEW] Gửi thông báo: Thành công!
             client.publish(mqtt_topic_ota_status, "success");
-            Serial.println("[Task 6] Đã gửi lệnh success. Đang đợi đẩy bản tin đi...");
-
-            // [FIX QUAN TRỌNG] Vòng lặp xả bộ đệm (Flush Buffer)
-            // Gọi loop liên tục trong 2 giây để đảm bảo gói tin bay ra khỏi ESP32
-            for (int i = 0; i < 20; i++) {
-                client.loop();
-                vTaskDelay(pdMS_TO_TICKS(100));
-            }
-
-            Serial.println(">>> KHỞI ĐỘNG LẠI HỆ THỐNG <<<");
-            ESP.restart();
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            ESP.restart(); 
         }
-        else
+        else 
         {
             Serial.println("[Task 6] Cài đặt firmware thất bại.");
-            
-            // [FIX] Kết nối lại MQTT nếu bị rớt để báo lỗi
-            if (!client.connected()) {
-                client.connect(deviceID);
-            }
-            
+            // [NEW] Gửi thông báo: Lỗi cập nhật
             client.publish(mqtt_topic_ota_status, "failed_update");
-            g_otaInProgress = false; // Trả lại quyền cho Task 5
-            continue;
+            g_otaInProgress = false; 
+            continue; 
         }
     }
 }
+
 
 void setup()
 {
@@ -1135,7 +1075,6 @@ void setup()
     loadConfig(); 
     sys_wifi_init(); 
     sys_capserver_init();
-    WiFi.setSleep(false);
     pinMode(BOOT_PIN, INPUT_PULLUP);
     pinMode(RST_PIN, INPUT_PULLUP);
     pinMode(IN_SIG2, INPUT_PULLDOWN);
