@@ -127,17 +127,34 @@ void sys_capserver_init()
 
 void sys_capserver_proc()
 {
-    dnsServer.processNextRequest();
-    if (wifi_id_received && wifi_password_received)
-    {
-
-        connectToWiFi(wifi_id.c_str(),wifi_password.c_str());
-        if(wifiState == WIFI_CONNECTED){
-            saveWiFiCredentials(wifi_id.c_str(),wifi_password.c_str());
-            Serial.println("Saved");
-        }
-        wifi_id_received = false;
-        wifi_password_received = false;
+    if (wifiState == WIFI_NOT_CONFIGURED) {
+        dnsServer.processNextRequest();
     }
     
+    if (wifi_id_received && wifi_password_received)
+    {
+        Serial.println("[CapServer] Received credentials. Starting connection attempt...");
+
+        connectToWiFi(wifi_id.c_str(), wifi_password.c_str());
+        
+        if(wifiState == WIFI_CONNECTED){
+            Serial.println("[CapServer] WiFi Connected (Got IP). Checking DNS/Internet access...");
+            
+            if (checkNetworkConnectivity()) { 
+                saveWiFiCredentials(wifi_id.c_str(), wifi_password.c_str());
+                Serial.println("[CapServer] Saved");
+                WiFi.softAPdisconnect(true);
+            } else {
+                Serial.println("[CapServer] Network check FAILED (Cannot resolve IP). Setting state to WIFI_CONFIGURED_NOT_CONNECTED.");
+                
+                wifiState = WIFI_CONFIGURED_NOT_CONNECTED; 
+                WiFi.softAPdisconnect(true);
+            }
+        } 
+        else if (wifiState == WIFI_CONFIGURED_NOT_CONNECTED) {
+            Serial.println("[CapServer] WiFi connection failed (Wrong credentials/Timeout). Setting state to WIFI_NOT_CONFIGURED.");
+            WiFi.disconnect(true);
+            wifiState = WIFI_NOT_CONFIGURED;
+        }
+    }
 }
