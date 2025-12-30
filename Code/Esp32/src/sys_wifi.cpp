@@ -2,8 +2,14 @@
 #include <sys_eeprom.hpp>
 #include <WiFi.h>
 #include <string.h> 
-#include <ESP32Ping.h> // Thư viện này định nghĩa đối tượng toàn cục 'Ping'
+#include <ESP32Ping.h> 
 #include <Arduino.h>
+
+// --- THÊM DÒNG NÀY: Mật khẩu cho Captive Portal ---
+// Lưu ý: Mật khẩu bắt buộc phải >= 8 ký tự. 
+// Nếu ngắn hơn, ESP32 sẽ bỏ qua và phát Wifi không pass.
+#define AP_CONFIG_PASSWORD  "12345678" 
+
 WiFiState wifiState = WIFI_NOT_CONFIGURED;
 
 void connectToWiFi(const char *ssid, const char *password)
@@ -13,7 +19,7 @@ void connectToWiFi(const char *ssid, const char *password)
 
     uint8_t attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20)
-    { // Try to connect for up to 10 seconds
+    { 
         delay(500);
         Serial.print(".");
         attempts++;
@@ -29,10 +35,9 @@ void connectToWiFi(const char *ssid, const char *password)
 
         // Turn on built-in LED
         pinMode(2, OUTPUT);
-        digitalWrite(2, HIGH); // Assuming built-in LED is active low
+        digitalWrite(2, HIGH); 
         wifiState = WIFI_CONNECTED;
     }
-    
     else
     {
         wifiState = WIFI_CONFIGURED_NOT_CONNECTED;
@@ -41,7 +46,6 @@ void connectToWiFi(const char *ssid, const char *password)
 
 void saveWiFiCredentials(const char *newSSID, const char *newPassword)
 {
-    // Save new WiFi credentials to EEPROM
     saveWiFiCredentialsToEEPROM(newSSID, newPassword);
 }
     
@@ -60,24 +64,25 @@ void sys_wifi_init()
         Serial.println("No WiFi credentials found. Starting AP mode for configuration.");
         WiFi.mode(WIFI_AP);
 
-        // --- ĐÂY LÀ THAY ĐỔI QUAN TRỌNG ---
+        // --- ĐÂY LÀ PHẦN SỬA ĐỔI ĐỂ CÓ PASSWORD ---
         
-        // Kiểm tra xem deviceID trong EEPROM có rỗng không (ví dụ: lần chạy đầu tiên)
+        // Kiểm tra xem deviceID trong EEPROM có rỗng không
         if (sys_eeprom_deviceID[0] == '\0') 
         {
-            // Nếu rỗng, dùng một tên AP mặc định an toàn
-            WiFi.softAP("ESP32_CONFIG_AP"); 
-            Serial.println("Warning: deviceID not set in EEPROM. Using default AP name 'ESP32_CONFIG_AP'.");
+            // Nếu rỗng, dùng tên mặc định VÀ password
+            WiFi.softAP("ESP32_CONFIG_AP", AP_CONFIG_PASSWORD); 
+            Serial.println("Warning: deviceID not set. Using default AP name 'ESP32_CONFIG_AP' with password.");
         } 
         else 
         {
-            // Nếu đã có deviceID, dùng nó làm tên Soft AP
-            WiFi.softAP(sys_eeprom_deviceID);
+            // Nếu đã có deviceID, dùng nó làm tên AP VÀ password
+            WiFi.softAP(sys_eeprom_deviceID, AP_CONFIG_PASSWORD);
             Serial.print("Soft AP name set from deviceID: ");
             Serial.println(sys_eeprom_deviceID);
+            Serial.println("Password set: " AP_CONFIG_PASSWORD);
         }
         
-        // --- HẾT THAY ĐỔI ---
+        // --- HẾT PHẦN SỬA ĐỔI ---
 
         Serial.print("AP IP address: ");
         Serial.println(WiFi.softAPIP());
@@ -89,7 +94,7 @@ void clearWiFiCredentials()
     clearWiFiCredentialsInEEPROM();
     wifiState = WIFI_NOT_CONFIGURED;
     pinMode(2, OUTPUT);
-    digitalWrite(2, LOW); // Assuming built-in LED is active low
+    digitalWrite(2, LOW); 
     sys_wifi_init();
 }
 
@@ -97,17 +102,14 @@ bool checkNetworkConnectivity()
 {
     const char *testHost = "www.google.com";
     const int pingCount = 2; 
-    // const int timeoutMs = 1000; // Tham số này không được hỗ trợ trong hàm ping(host, count)
 
     Serial.printf("[WiFi Check] Pinging %s (%d times)...\n", testHost, pingCount);
 
-    // SỬA LỖI 1: Chỉ dùng 2 tham số (host, count), giống như trong main.cpp
     if (Ping.ping(testHost, pingCount)) {
         Serial.println("[WiFi Check] Ping SUCCESS. Network is UP and IP is resolved.");
         return true;
     } else {
-        // Ping thất bại (Không phân giải được DNS/mất kết nối Internet)
         Serial.println("[WiFi Check] Ping FAILED. IP resolution or network access issue.");
-        return false; // SỬA LỖI 2: Thêm "return false;"
+        return false; 
     }
 }

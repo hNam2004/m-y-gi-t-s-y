@@ -34,7 +34,7 @@ char mqtt_topic_ota_status[150];
 #define RST_PIN 23
 #define LED_PIN 21
 #define COIN_PIN 12
-#define IN_SIG2 18
+#define IN_SIG2 19
 #define OUT_SIG1 14
 
 WiFiClient espClient;
