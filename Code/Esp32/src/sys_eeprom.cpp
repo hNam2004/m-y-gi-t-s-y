@@ -1,16 +1,19 @@
 #include <EEPROM.h>
-#include <sys_eeprom.hpp>
-#include <string.h> // Cần cho strcmp
+#include "sys_eeprom.hpp" // Đảm bảo include file header này
+#include <string.h>       // Cần cho strcmp
 
 // --- Định nghĩa các biến toàn cục ---
 char sys_eeprom_ssid[MAX_SSID_LENGTH];
 char sys_eeprom_password[MAX_PASSWORD_LENGTH];
-char sys_eeprom_deviceID[MAX_DEVICE_ID_LENGTH];
+
+// [SỬA] Dùng MAX_DEVICE_SERIAL_LENGTH
+char sys_eeprom_deviceSerial[MAX_DEVICE_SERIAL_LENGTH]; 
+
 char sys_eeprom_mqttServer[MAX_MQTT_SERVER_LENGTH];
 char sys_eeprom_machineType[MAX_MACHINE_TYPE_LENGTH];
 
 
-// === CÁC HÀM WIFI (Từ code của bạn) ===
+// === CÁC HÀM WIFI (Giữ nguyên logic cũ) ===
 
 void clearWiFiCredentialsInEEPROM() {
     // EEPROM.begin(512) đã được gọi trong setup() của main.cpp
@@ -60,17 +63,17 @@ void saveWiFiCredentialsToEEPROM(const char *ssid, const char *password)
 }
 
 
-// === CÁC HÀM CẤU HÌNH (MỚI) ===
+// === CÁC HÀM CẤU HÌNH (ĐÃ CẬP NHẬT) ===
 
 /**
- * @brief Đọc Device ID, Server, Type từ EEPROM vào biến toàn cục
+ * @brief Đọc Device Serial, Server, Type từ EEPROM vào biến toàn cục
  */
 void readConfigDataFromEEPROM()
 {
-    // EEPROM.begin(512) đã được gọi trong setup() của main.cpp
-    for (int i = 0; i < MAX_DEVICE_ID_LENGTH; i++) {
-        sys_eeprom_deviceID[i] = EEPROM.read(ADDR_DEVICE_ID + i);
-        if (sys_eeprom_deviceID[i] == '\0') break;
+    // [SỬA] Dùng MAX_DEVICE_SERIAL_LENGTH và ADDR_DEVICE_SERIAL
+    for (int i = 0; i < MAX_DEVICE_SERIAL_LENGTH; i++) {
+        sys_eeprom_deviceSerial[i] = EEPROM.read(ADDR_DEVICE_SERIAL + i);
+        if (sys_eeprom_deviceSerial[i] == '\0') break;
     }
 
     for (int i = 0; i < MAX_MQTT_SERVER_LENGTH; i++) {
@@ -93,20 +96,24 @@ void saveConfigDataToEEPROM(const char *key, const char *value)
     int maxLen = -1;
     char* globalVar = NULL;
 
-    if (strcmp(key, "deviceID") == 0) {
-        addr = ADDR_DEVICE_ID;
-        maxLen = MAX_DEVICE_ID_LENGTH;
-        globalVar = sys_eeprom_deviceID;
-    } else if (strcmp(key, "mqttServer") == 0) {
+    // [SỬA] Key đổi thành "deviceSerial" và dùng Macro mới
+    if (strcmp(key, "deviceSerial") == 0) {
+        addr = ADDR_DEVICE_SERIAL;
+        maxLen = MAX_DEVICE_SERIAL_LENGTH;
+        globalVar = sys_eeprom_deviceSerial;
+    } 
+    else if (strcmp(key, "mqttServer") == 0) {
         addr = ADDR_MQTT_SERVER;
         maxLen = MAX_MQTT_SERVER_LENGTH;
         globalVar = sys_eeprom_mqttServer;
-    } else if (strcmp(key, "machineType") == 0) {
+    } 
+    else if (strcmp(key, "machineType") == 0) {
         addr = ADDR_MACHINE_TYPE;
         maxLen = MAX_MACHINE_TYPE_LENGTH;
         globalVar = sys_eeprom_machineType;
     }
 
+    // Logic ghi giữ nguyên
     if (addr != -1 && globalVar != NULL) {
         for (int i = 0; i < maxLen; i++) {
             EEPROM.write(addr + i, value[i]);

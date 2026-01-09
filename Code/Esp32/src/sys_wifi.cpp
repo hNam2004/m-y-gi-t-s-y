@@ -65,20 +65,20 @@ void sys_wifi_init()
         WiFi.mode(WIFI_AP);
 
         // --- ĐÂY LÀ PHẦN SỬA ĐỔI ĐỂ CÓ PASSWORD ---
-        
-        // Kiểm tra xem deviceID trong EEPROM có rỗng không
-        if (sys_eeprom_deviceID[0] == '\0') 
+
+        // Kiểm tra xem deviceSerial trong EEPROM có rỗng không
+        if (sys_eeprom_deviceSerial[0] == '\0') 
         {
             // Nếu rỗng, dùng tên mặc định VÀ password
             WiFi.softAP("ESP32_CONFIG_AP", AP_CONFIG_PASSWORD); 
-            Serial.println("Warning: deviceID not set. Using default AP name 'ESP32_CONFIG_AP' with password.");
+            Serial.println("Warning: deviceSerial not set. Using default AP name 'ESP32_CONFIG_AP' with password.");
         } 
         else 
         {
-            // Nếu đã có deviceID, dùng nó làm tên AP VÀ password
-            WiFi.softAP(sys_eeprom_deviceID, AP_CONFIG_PASSWORD);
-            Serial.print("Soft AP name set from deviceID: ");
-            Serial.println(sys_eeprom_deviceID);
+            // Nếu đã có deviceSerial, dùng nó làm tên AP VÀ password
+            WiFi.softAP(sys_eeprom_deviceSerial, AP_CONFIG_PASSWORD);
+            Serial.print("Soft AP name set from deviceSerial: ");
+            Serial.println(sys_eeprom_deviceSerial);
             Serial.println("Password set: " AP_CONFIG_PASSWORD);
         }
         

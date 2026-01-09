@@ -19,7 +19,8 @@
 #include <CRC32.h>
 #include <HTTPClient.h>
 
-char deviceID[32];
+// --- BIẾN TOÀN CỤC: Đã đổi thành deviceSerial ---
+char deviceSerial[32];
 char mqttServer[100];
 const int mqtt_port = 7183;
 const char *FIRMWARE_VERSION = "1.0.0";
@@ -29,6 +30,7 @@ char mqtt_topic_cmd[150];
 char mqtt_topic_status[150];
 char mqtt_topic_control[150];
 char mqtt_topic_ota_status[150]; 
+String ID = "01";
 
 #define BOOT_PIN 99
 #define RST_PIN 23
@@ -319,12 +321,11 @@ bool readAndParseMachineData()
 
 void buildMqttTopics()
 {
-    sprintf(mqtt_topic_info, "Kdev/%s/info", deviceID);
-    sprintf(mqtt_topic_cmd, "Kdev/%s/cmd", deviceID);
-    sprintf(mqtt_topic_status, "Kdev/%s/status", deviceID);
-    sprintf(mqtt_topic_control, "Kdev/%s/control", deviceID);
-    sprintf(mqtt_topic_ota_status, "Kdev/%s/ota_status", deviceID);
-
+    sprintf(mqtt_topic_info, "Kdev/%s/info", deviceSerial);
+    sprintf(mqtt_topic_cmd, "Kdev/%s/cmd", deviceSerial);
+    sprintf(mqtt_topic_status, "Kdev/%s/status", deviceSerial);
+    sprintf(mqtt_topic_control, "Kdev/%s/control", deviceSerial);
+    sprintf(mqtt_topic_ota_status, "Kdev/%s/ota_status", deviceSerial);
     Serial.println("--- MQTT Topics Đã Xây Dựng ---");
     Serial.printf("Info: %s\n", mqtt_topic_info);
     Serial.printf("Control: %s\n", mqtt_topic_control);
@@ -346,7 +347,8 @@ void loadConfig()
 {
     readConfigDataFromEEPROM(); 
     
-    String id = String(sys_eeprom_deviceID);
+    // --- THAY ĐỔI: Dùng sys_eeprom_deviceSerial thay vì sys_eeprom_deviceID ---
+    String id = String(sys_eeprom_deviceSerial);
     String server = String(sys_eeprom_mqttServer);
     String typeStr = String(sys_eeprom_machineType);
     
@@ -366,11 +368,12 @@ void loadConfig()
         machineType = 1; 
     }
     
-    strcpy(deviceID, id.c_str());
+    strcpy(deviceSerial, id.c_str());
     strcpy(mqttServer, server.c_str());
 
     Serial.println("--- Cấu Hình Đã Tải (từ EEPROM) ---");
-    Serial.printf("Device ID: %s\n", deviceID);
+    // --- THAY ĐỔI: In ra là Device Serial ---
+    Serial.printf("Device Serial: %s\n", deviceSerial);
     Serial.printf("MQTT Server: %s\n", mqttServer);
     Serial.printf("Machine Type: %d (%s)\n", machineType, (machineType == 1) ? "Modbus" : "Coin Pin");
     Serial.println("-------------------------");
@@ -553,19 +556,20 @@ void checkSerialCommands()
 
                     if (firstSlash > 0 && secondSlash > (firstSlash + 1))
                     {
-                        String newID = command.substring(0, firstSlash);
+                        String newSerial = command.substring(0, firstSlash);
                         String newServer = command.substring(firstSlash + 1, secondSlash);
                         String newTypeStr = command.substring(secondSlash + 1);
 
                         int newType = newTypeStr.toInt();
-                        bool idValid = newID.length() > 0 && newID.length() < MAX_DEVICE_ID_LENGTH;
+                        // --- THAY ĐỔI: Dùng MAX_DEVICE_SERIAL_LENGTH ---
+                        bool idValid = newSerial.length() > 0 && newSerial.length() < MAX_DEVICE_SERIAL_LENGTH;
                         bool serverValid = newServer.length() > 0 && newServer.length() < MAX_MQTT_SERVER_LENGTH;
                         bool typeValid = (newType == 1 || newType == 2); 
 
                         if (idValid && serverValid && typeValid)
                         {
                             Serial.println("OK: Cấu hình hợp lệ. Đang tiến hành lưu...");
-                            saveConfigDataToEEPROM("deviceID", newID.c_str());
+                            saveConfigDataToEEPROM("deviceSerial", newSerial.c_str());
                             saveConfigDataToEEPROM("mqttServer", newServer.c_str());
                             saveConfigDataToEEPROM("machineType", newTypeStr.c_str());
                             Serial.println("Lưu hoàn tất! Sẽ khởi động lại trong 2 giây...");
@@ -579,7 +583,7 @@ void checkSerialCommands()
                     }
                     else
                     {
-                        Serial.println("Lỗi: Định dạng sai. Phải là: @ID/SERVER/TYPE");
+                        Serial.println("Lỗi: Định dạng sai. Phải là: @SERIAL/SERVER/TYPE");
                     }
                 }
                 else
@@ -591,7 +595,8 @@ void checkSerialCommands()
         }
         else if (isPrintable(c)) 
         {
-            if (serialCmdBuffer.length() < (MAX_DEVICE_ID_LENGTH + MAX_MQTT_SERVER_LENGTH + MAX_MACHINE_TYPE_LENGTH + 10))
+            // --- THAY ĐỔI: Dùng MAX_DEVICE_SERIAL_LENGTH ---
+            if (serialCmdBuffer.length() < (MAX_DEVICE_SERIAL_LENGTH + MAX_MQTT_SERVER_LENGTH + MAX_MACHINE_TYPE_LENGTH + 10))
             {
                  serialCmdBuffer += c;
             }
@@ -814,7 +819,7 @@ void task5Function(void *parameter)
                 if (millis() - lastMqttAttempt > 5000)
                 {
                     Serial.print("Attempting MQTT connection...");
-                    if (client.connect(deviceID))
+                    if (client.connect(deviceSerial))
                     {
                         Serial.println("MQTT connected");
                         client.subscribe(mqtt_topic_control);
